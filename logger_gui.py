@@ -542,7 +542,7 @@ class MainPanel(wx.Panel):
         self._status_text.SetForegroundColour(CLR_MUTED)
         self._logging_text.SetForegroundColour(CLR_RED)
         self._logging_text.SetFont(wx.Font(9, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
-        self._log_toggle_btn    = wx.Button(status_panel, label="Toggle Log",    size=(90, -1))
+        self._log_toggle_btn    = wx.Button(status_panel, label="Start Log",    size=(90, -1))
         self._select_params_btn = wx.Button(status_panel, label="Select Params", size=(100, -1))
         self._log_toggle_btn.Enable(False)
         self._select_params_btn.Enable(False)
@@ -735,6 +735,7 @@ class MainPanel(wx.Panel):
         log_label = "● LOGGING" if is_logging else ""
         if log_label != self._logging_text.GetLabel():
             self._logging_text.SetLabel(log_label)
+            self._log_toggle_btn.SetLabel("Stop Log" if is_logging else "Start Log")
         self._gauge.update(by_name, by_unit, is_logging)
         self._gauge.poll_changes()
 
