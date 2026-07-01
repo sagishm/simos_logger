@@ -233,7 +233,8 @@ class GaugeCard(wx.Panel):
         if self._value != new_value or self._bg != new_bg:
             self._value = new_value
             self._bg    = new_bg
-            self.Refresh()   # triggers _on_paint — single WM_PAINT per card
+            return True   # caller should Refresh/Update us
+        return False
 
     # ── Color marking ─────────────────────────────────────────────────────────
 
@@ -365,9 +366,16 @@ class GaugeGrid(wx.ScrolledWindow):
 
     def update(self, by_name, is_logging):
         # by_name is a pre-built dict: name → value string
+        dirty = []
         for name, card in self._cards.items():
             if name in by_name:
-                card.update(by_name[name], is_logging)
+                if card.update(by_name[name], is_logging):
+                    dirty.append(card)
+        # invalidate all dirty cards then flush once
+        for card in dirty:
+            card.Refresh()
+        if dirty:
+            self.Update()
 
     def get_order(self):
         return list(self._order)
