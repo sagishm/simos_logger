@@ -6,11 +6,12 @@ import wx
 import threading
 import os
 import sys
+import json
 
 from logger_core import LoggerCore
 
 DEFAULT_LOG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
-
+PREFS_FILE       = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gauge_prefs.json")
 
 # ── Colour constants ──────────────────────────────────────────────────────────
 CLR_BG      = wx.Colour(15,  17,  23)
@@ -21,14 +22,29 @@ CLR_MUTED   = wx.Colour(100, 116, 139)
 CLR_GREEN   = wx.Colour(34,  197, 94)
 CLR_RED     = wx.Colour(239, 68,  68)
 CLR_ACCENT  = wx.Colour(79,  156, 249)
+CLR_DRAG_HL = wx.Colour(79,  156, 249, 60)   # drop-target highlight
 
 
-# ── Interface scanner (ported from VW_Flash_GUI.py) ───────────────────────────
+# ── Prefs (selected params, order, colors) ────────────────────────────────────
+
+def _load_prefs():
+    try:
+        with open(PREFS_FILE, "r") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def _save_prefs(prefs):
+    try:
+        with open(PREFS_FILE, "w") as f:
+            json.dump(prefs, f, indent=2)
+    except Exception:
+        pass
+
+
+# ── Interface scanner ─────────────────────────────────────────────────────────
 
 def _scan_j2534_registry():
-    """Read installed J2534 devices from Windows registry.
-    Checks both the native hive and Wow6432Node (32-bit entries) so
-    64-bit Python finds the same devices as 32-bit VW Flash."""
     devices = []
     if sys.platform != "win32":
         return devices
@@ -42,7 +58,6 @@ def _scan_j2534_registry():
         r"Software\Wow6432Node\PassThruSupport.04.04",
     ]
     seen_dlls = set()
-
     for path in hive_paths:
         try:
             base = winreg.OpenKeyEx(winreg.HKEY_LOCAL_MACHINE, path)
@@ -58,48 +73,126 @@ def _scan_j2534_registry():
                     devices.append((name, dll))
             except OSError:
                 pass
-
     return devices
 
 
 def scan_interfaces():
-    """
-    Returns a list of (display_label, interface_type, interface_path) tuples.
-    interface_type is "J2534", "SocketCAN", or "USBISOTP".
-    interface_path is the DLL path, CAN interface name, or serial port.
-    """
     results = []
-
-    # J2534 devices from Windows registry
     for name, dll in _scan_j2534_registry():
         results.append((f"J2534 — {name}", "J2534", dll))
-
-    # SocketCAN on Linux
     if sys.platform == "linux":
         results.append(("SocketCAN — can0", "SocketCAN", "can0"))
-
-    # Serial ports (USB-ISOTP adapters)
     try:
         import serial.tools.list_ports
         for port in serial.tools.list_ports.comports():
-            label = f"USB-ISOTP — {port.name} : {port.description}"
-            results.append((label, "USBISOTP", port.device))
+            results.append((f"USB-ISOTP — {port.name} : {port.description}", "USBISOTP", port.device))
     except Exception:
         pass
-
     return results
+
+
+# ── Param selector dialog ─────────────────────────────────────────────────────
+
+class ParamSelectorDialog(wx.Dialog):
+    def __init__(self, parent, all_params, selected):
+        super().__init__(parent, title="Select Parameters", size=(340, 500),
+                         style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        self.SetBackgroundColour(CLR_BG)
+
+        panel = wx.Panel(self)
+        panel.SetBackgroundColour(CLR_BG)
+        vbox = wx.BoxSizer(wx.VERTICAL)
+
+        # search box
+        self._search = wx.TextCtrl(panel, style=wx.TE_PROCESS_ENTER)
+        self._search.SetBackgroundColour(CLR_SURFACE)
+        self._search.SetForegroundColour(CLR_TEXT)
+        self._search.SetHint("Search…")
+        vbox.Add(self._search, 0, wx.EXPAND | wx.ALL, 8)
+
+        # checklist
+        self._clb = wx.CheckListBox(panel, choices=all_params)
+        self._clb.SetBackgroundColour(CLR_SURFACE)
+        self._clb.SetForegroundColour(CLR_TEXT)
+        for i, name in enumerate(all_params):
+            if name in selected:
+                self._clb.Check(i, True)
+        vbox.Add(self._clb, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
+
+        # select all / none
+        btn_row = wx.BoxSizer(wx.HORIZONTAL)
+        all_btn  = wx.Button(panel, label="All",  size=(60, -1))
+        none_btn = wx.Button(panel, label="None", size=(60, -1))
+        all_btn.Bind(wx.EVT_BUTTON,  lambda _: self._check_all(True))
+        none_btn.Bind(wx.EVT_BUTTON, lambda _: self._check_all(False))
+        btn_row.Add(all_btn,  0, wx.RIGHT, 4)
+        btn_row.Add(none_btn, 0)
+        vbox.Add(btn_row, 0, wx.LEFT | wx.BOTTOM, 8)
+
+        # OK / Cancel
+        btns = self.CreateButtonSizer(wx.OK | wx.CANCEL)
+        vbox.Add(btns, 0, wx.EXPAND | wx.ALL, 8)
+
+        panel.SetSizer(vbox)
+        outer = wx.BoxSizer(wx.VERTICAL)
+        outer.Add(panel, 1, wx.EXPAND)
+        self.SetSizer(outer)
+
+        self._all_params = all_params
+        self._search.Bind(wx.EVT_TEXT, self._on_search)
+
+        for w in (self, panel, self._clb):
+            w.SetBackgroundColour(CLR_SURFACE if w is self._clb else CLR_BG)
+
+    def _check_all(self, state):
+        for i in range(self._clb.GetCount()):
+            self._clb.Check(i, state)
+
+    def _on_search(self, _):
+        q = self._search.GetValue().lower()
+        sel = self.get_selected()
+        self._clb.Clear()
+        filtered = [p for p in self._all_params if q in p.lower()]
+        self._clb.InsertItems(filtered, 0)
+        for i, name in enumerate(filtered):
+            if name in sel:
+                self._clb.Check(i, True)
+
+    def get_selected(self):
+        result = set()
+        for i in range(self._clb.GetCount()):
+            if self._clb.IsChecked(i):
+                result.add(self._clb.GetString(i))
+        return result
 
 
 # ── Gauge card ────────────────────────────────────────────────────────────────
 
 class GaugeCard(wx.Panel):
-    def __init__(self, parent, name, unit):
+    # color presets: (menu label, background colour tuple)
+    COLOR_PRESETS = [
+        ("Red",    (80, 20, 20)),
+        ("Orange", (80, 50, 10)),
+        ("Green",  (10, 60, 30)),
+        ("Blue",   (10, 40, 80)),
+        ("Purple", (50, 20, 80)),
+        ("Clear",  None),
+    ]
+
+    def __init__(self, parent, name, unit=""):
         super().__init__(parent, style=wx.BORDER_NONE)
         self.name        = name
         self._mark_color = None
+        self._dragging   = False
 
         self.SetBackgroundColour(CLR_SURFACE)
         sizer = wx.BoxSizer(wx.VERTICAL)
+
+        # drag handle bar at top
+        self._drag_bar = wx.Panel(self, size=(-1, 6))
+        self._drag_bar.SetBackgroundColour(CLR_BORDER)
+        self._drag_bar.SetCursor(wx.Cursor(wx.CURSOR_SIZING))
+        sizer.Add(self._drag_bar, 0, wx.EXPAND)
 
         self._name_lbl  = wx.StaticText(self, label=name.upper())
         self._value_lbl = wx.StaticText(self, label="—")
@@ -112,55 +205,240 @@ class GaugeCard(wx.Panel):
         self._unit_lbl.SetForegroundColour(CLR_MUTED)
         self._unit_lbl.SetFont(wx.Font(7, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
 
-        sizer.Add(self._name_lbl,  0, wx.ALIGN_CENTER | wx.TOP, 8)
+        sizer.Add(self._name_lbl,  0, wx.ALIGN_CENTER | wx.TOP, 4)
         sizer.Add(self._value_lbl, 0, wx.ALIGN_CENTER | wx.TOP | wx.BOTTOM, 4)
-        sizer.Add(self._unit_lbl,  0, wx.ALIGN_CENTER | wx.BOTTOM, 8)
+        sizer.Add(self._unit_lbl,  0, wx.ALIGN_CENTER | wx.BOTTOM, 6)
         self.SetSizer(sizer)
         self.SetMinSize((140, 80))
 
+        # right-click color menu on all sub-widgets
         for w in (self, self._name_lbl, self._value_lbl, self._unit_lbl):
             w.Bind(wx.EVT_RIGHT_DOWN, self._on_right_click)
 
+        # drag-and-drop via drag bar
+        self._drag_bar.Bind(wx.EVT_LEFT_DOWN,  self._on_drag_start)
+        self._drag_bar.Bind(wx.EVT_LEFT_UP,    self._on_drag_end)
+        self._drag_bar.Bind(wx.EVT_MOTION,     self._on_drag_motion)
+
+    # ── Live update ───────────────────────────────────────────────────────────
+
     def update(self, value, logging_active):
-        changed = False
         new_label = str(value)
         if self._value_lbl.GetLabel() != new_label:
             self._value_lbl.SetLabel(new_label)
-            changed = True
+            self._value_lbl.Refresh()
 
         if logging_active:
             new_bg = wx.Colour(40, 20, 20)
         elif self._mark_color:
-            new_bg = self._mark_color
+            new_bg = wx.Colour(*self._mark_color)
         else:
             new_bg = CLR_SURFACE
 
         if self.GetBackgroundColour() != new_bg:
             self.SetBackgroundColour(new_bg)
-            changed = True
+            for child in self.GetChildren():
+                if child is not self._drag_bar:
+                    child.SetBackgroundColour(new_bg)
+            self.Refresh()
 
-        if changed:
-            self._value_lbl.Refresh()  # only repaint the label, not the whole card
+    # ── Color marking ────────────────────────────────────────────────────────
+
+    def set_mark_color(self, color_tuple):
+        self._mark_color = color_tuple
+        bg = wx.Colour(*color_tuple) if color_tuple else CLR_SURFACE
+        self.SetBackgroundColour(bg)
+        for child in self.GetChildren():
+            if child is not self._drag_bar:
+                child.SetBackgroundColour(bg)
+        self.Refresh()
 
     def _on_right_click(self, _):
         menu = wx.Menu()
-        for label, color in [
-            ("Red",    wx.Colour(80, 20, 20)),
-            ("Orange", wx.Colour(80, 50, 10)),
-            ("Green",  wx.Colour(10, 60, 30)),
-            ("Blue",   wx.Colour(10, 40, 80)),
-            ("Purple", wx.Colour(50, 20, 80)),
-            ("Clear",  None),
-        ]:
+        for label, color in self.COLOR_PRESETS:
             item = menu.Append(wx.ID_ANY, label)
-            self.Bind(wx.EVT_MENU, lambda e, c=color: self._set_color(c), item)
+            self.Bind(wx.EVT_MENU, lambda e, c=color: self._pick_color(c), item)
         self.PopupMenu(menu)
         menu.Destroy()
 
-    def _set_color(self, color):
-        self._mark_color = color
-        self.SetBackgroundColour(color if color else CLR_SURFACE)
-        self.Refresh()
+    def _pick_color(self, color_tuple):
+        self.set_mark_color(color_tuple)
+        # notify parent to save prefs
+        evt = wx.CommandEvent(wx.EVT_MENU.typeId)
+        evt.SetString("color:" + self.name)
+        wx.PostEvent(self.GetParent(), evt)
+
+    # ── Drag-and-drop ────────────────────────────────────────────────────────
+
+    def _on_drag_start(self, event):
+        self._dragging   = True
+        self._drag_start = self.GetParent().ScreenToClient(self.ClientToScreen(event.GetPosition()))
+        self._drag_bar.CaptureMouse()
+
+    def _on_drag_end(self, event):
+        if not self._dragging:
+            return
+        self._dragging = False
+        if self._drag_bar.HasCapture():
+            self._drag_bar.ReleaseMouse()
+        pos = self.GetParent().ScreenToClient(self.ClientToScreen(event.GetPosition()))
+        wx.PostEvent(self.GetParent(), _DropEvent(self.name, pos))
+
+    def _on_drag_motion(self, event):
+        if self._dragging and event.Dragging() and event.LeftIsDown():
+            pos = self.GetParent().ScreenToClient(self.ClientToScreen(event.GetPosition()))
+            wx.PostEvent(self.GetParent(), _DragEvent(self.name, pos))
+
+
+# ── Custom drag/drop events ───────────────────────────────────────────────────
+
+_EVT_CARD_DRAG_TYPE = wx.NewEventType()
+_EVT_CARD_DROP_TYPE = wx.NewEventType()
+EVT_CARD_DRAG = wx.PyEventBinder(_EVT_CARD_DRAG_TYPE)
+EVT_CARD_DROP = wx.PyEventBinder(_EVT_CARD_DROP_TYPE)
+
+class _DragEvent(wx.PyEvent):
+    def __init__(self, name, pos):
+        super().__init__(_EVT_CARD_DRAG_TYPE)
+        self.card_name = name
+        self.pos       = pos
+
+class _DropEvent(wx.PyEvent):
+    def __init__(self, name, pos):
+        super().__init__(_EVT_CARD_DROP_TYPE)
+        self.card_name = name
+        self.pos       = pos
+
+
+# ── Gauge grid panel ──────────────────────────────────────────────────────────
+
+class GaugeGrid(wx.ScrolledWindow):
+    """Wrapping grid of GaugeCards with drag-to-reorder support."""
+
+    def __init__(self, parent):
+        super().__init__(parent, style=wx.BORDER_NONE)
+        self.SetScrollRate(0, 10)
+        self.SetBackgroundColour(CLR_BG)
+
+        self._sizer      = wx.WrapSizer(wx.HORIZONTAL)
+        self.SetSizer(self._sizer)
+
+        self._cards      = {}     # name → GaugeCard
+        self._order      = []     # list of names in display order
+        self._drag_name  = None   # card being dragged
+        self._drop_idx   = None   # current drop target index
+        self._on_order_changed = None  # callback(order)
+
+        self.Connect(-1, -1, _EVT_CARD_DRAG_TYPE, self._on_card_drag)
+        self.Connect(-1, -1, _EVT_CARD_DROP_TYPE, self._on_card_drop)
+        # save colors when right-click menu fires
+        self.Bind(wx.EVT_MENU, self._on_color_changed)
+
+    # ── Public API ────────────────────────────────────────────────────────────
+
+    def set_params(self, names, prefs):
+        """Rebuild cards for the given list of names."""
+        # keep existing cards if already present
+        to_remove = [n for n in list(self._cards) if n not in names]
+        for name in to_remove:
+            self._cards[name].Destroy()
+            del self._cards[name]
+
+        self._order = [n for n in self._order if n in names]
+        for name in names:
+            if name not in self._order:
+                self._order.append(name)
+
+        # create missing cards
+        for name in self._order:
+            if name not in self._cards:
+                card = GaugeCard(self, name)
+                self._cards[name] = card
+                color = prefs.get("colors", {}).get(name)
+                if color:
+                    card.set_mark_color(color)
+
+        self._rebuild_sizer()
+
+    def update(self, data, is_logging):
+        for name, card in self._cards.items():
+            entry = None
+            # data keys are numeric indices; match by Name field
+            for v in data.values():
+                if isinstance(v, dict) and v.get("Name") == name:
+                    entry = v
+                    break
+            if entry:
+                card.update(entry.get("Value", "—"), is_logging)
+
+    def get_order(self):
+        return list(self._order)
+
+    def get_colors(self):
+        return {name: card._mark_color for name, card in self._cards.items()
+                if card._mark_color is not None}
+
+    def set_order_changed_callback(self, fn):
+        self._on_order_changed = fn
+
+    # ── Internal ─────────────────────────────────────────────────────────────
+
+    def _rebuild_sizer(self):
+        self._sizer.Clear(detach=True)
+        for name in self._order:
+            if name in self._cards:
+                self._sizer.Add(self._cards[name], 0, wx.ALL, 5)
+        self.Layout()
+        self._sizer.FitInside(self)
+
+    def _card_at(self, pos):
+        """Return index in self._order of the card whose rect contains pos."""
+        for i, name in enumerate(self._order):
+            card = self._cards.get(name)
+            if card and card.GetRect().Contains(pos):
+                return i
+        return None
+
+    def _on_card_drag(self, event):
+        self._drag_name = event.card_name
+        idx = self._card_at(event.pos)
+        if idx is not None and idx != self._drop_idx:
+            self._drop_idx = idx
+            self._highlight_drop(idx)
+
+    def _on_card_drop(self, event):
+        if self._drag_name is None:
+            return
+        target_idx = self._card_at(event.pos)
+        if target_idx is not None and self._drag_name in self._order:
+            src_idx = self._order.index(self._drag_name)
+            if src_idx != target_idx:
+                self._order.insert(target_idx, self._order.pop(src_idx))
+                self._rebuild_sizer()
+                if self._on_order_changed:
+                    self._on_order_changed(self._order)
+        self._drag_name = None
+        self._drop_idx  = None
+        self._clear_highlights()
+
+    def _highlight_drop(self, idx):
+        self._clear_highlights()
+        name = self._order[idx] if idx < len(self._order) else None
+        if name and name in self._cards:
+            card = self._cards[name]
+            card._drag_bar.SetBackgroundColour(CLR_ACCENT)
+            card._drag_bar.Refresh()
+
+    def _clear_highlights(self):
+        for card in self._cards.values():
+            card._drag_bar.SetBackgroundColour(CLR_BORDER)
+            card._drag_bar.Refresh()
+
+    def _on_color_changed(self, event):
+        s = event.GetString()
+        if s.startswith("color:") and self._on_order_changed:
+            self._on_order_changed(self._order)  # triggers prefs save in parent
+        event.Skip()
 
 
 # ── Main panel ────────────────────────────────────────────────────────────────
@@ -172,49 +450,47 @@ class MainPanel(wx.Panel):
 
         self._logger      = None
         self._thread      = None
-        self._cards       = {}        # name → GaugeCard
-        self._iface_list  = []        # parallel list to dropdown: (label, type, path)
+        self._iface_list  = []
         self._last_status = ""
+        self._all_params  = []     # all param names seen so far
+        self._selected    = set()  # currently selected param names
+        self._prefs       = _load_prefs()
 
         self._build_ui()
-        self._do_scan()               # populate on startup
+        self._do_scan()
 
-        # Poll logger state at 10fps from GUI thread — no wx.CallAfter flooding
         self._ui_timer = wx.Timer(self)
         self.Bind(wx.EVT_TIMER, self._on_ui_timer, self._ui_timer)
+
+    # ── UI construction ───────────────────────────────────────────────────────
 
     def _build_ui(self):
         root = wx.BoxSizer(wx.VERTICAL)
 
-        # ── Controls bar (two rows) ───────────────────────────────────────────
+        # ── Controls bar ─────────────────────────────────────────────────────
         ctrl_panel = wx.Panel(self)
         ctrl_panel.SetBackgroundColour(CLR_SURFACE)
         ctrl = wx.BoxSizer(wx.VERTICAL)
 
-        # Row 1: device picker
+        # Row 1: device picker + mode + stream + connect
         row1 = wx.BoxSizer(wx.HORIZONTAL)
         row1.Add(wx.StaticText(ctrl_panel, label="Device:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 10)
-
         self._device_choice = wx.Choice(ctrl_panel, size=(380, -1))
         row1.Add(self._device_choice, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 6)
-
         self._scan_btn = wx.Button(ctrl_panel, label="Scan", size=(52, -1))
         self._scan_btn.Bind(wx.EVT_BUTTON, self._on_scan)
         row1.Add(self._scan_btn, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 6)
 
-        # Mode
         row1.Add(wx.StaticText(ctrl_panel, label="Mode:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 16)
         self._mode_choice = wx.Choice(ctrl_panel, choices=["22", "3E", "HSL"])
         self._mode_choice.SetSelection(0)
         row1.Add(self._mode_choice, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 6)
 
-        # TCP stream toggle
         self._stream_chk = wx.CheckBox(ctrl_panel, label="Stream :65432")
         self._stream_chk.SetValue(False)
         row1.Add(self._stream_chk, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 16)
 
         row1.AddStretchSpacer()
-
         self._connect_btn = wx.Button(ctrl_panel, label="Connect", size=(80, -1))
         self._stop_btn    = wx.Button(ctrl_panel, label="Stop",    size=(80, -1))
         self._stop_btn.Enable(False)
@@ -224,7 +500,6 @@ class MainPanel(wx.Panel):
         self._stop_btn.Bind(wx.EVT_BUTTON, self._on_stop)
         row1.Add(self._connect_btn, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6)
         row1.Add(self._stop_btn,    0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 10)
-
         ctrl.Add(row1, 0, wx.EXPAND | wx.TOP | wx.BOTTOM, 6)
 
         # Row 2: log path
@@ -256,14 +531,18 @@ class MainPanel(wx.Panel):
         self._logging_text.SetForegroundColour(CLR_RED)
         self._logging_text.SetFont(wx.Font(9, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
 
-        self._log_toggle_btn = wx.Button(status_panel, label="Toggle Log", size=(90, -1))
+        self._log_toggle_btn    = wx.Button(status_panel, label="Toggle Log",     size=(90, -1))
+        self._select_params_btn = wx.Button(status_panel, label="Select Params",  size=(100, -1))
         self._log_toggle_btn.Enable(False)
+        self._select_params_btn.Enable(False)
         self._log_toggle_btn.Bind(wx.EVT_BUTTON, self._on_toggle_log)
+        self._select_params_btn.Bind(wx.EVT_BUTTON, self._on_select_params)
 
-        ss.Add(self._status_dot,      0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT,  10)
-        ss.Add(self._status_text,     0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT,   6)
-        ss.Add(self._logging_text,    0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT,  16)
-        ss.Add(self._log_toggle_btn,  0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT,  20)
+        ss.Add(self._status_dot,         0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT,  10)
+        ss.Add(self._status_text,        0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT,   6)
+        ss.Add(self._logging_text,       0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT,  16)
+        ss.Add(self._log_toggle_btn,     0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT,  20)
+        ss.Add(self._select_params_btn,  0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT,  10)
         status_panel.SetSizer(ss)
         for child in status_panel.GetChildren():
             child.SetBackgroundColour(CLR_BG)
@@ -271,12 +550,9 @@ class MainPanel(wx.Panel):
         root.Add(status_panel, 0, wx.EXPAND | wx.TOP, 6)
 
         # ── Gauge grid ────────────────────────────────────────────────────────
-        self._grid_panel = wx.ScrolledWindow(self)
-        self._grid_panel.SetScrollRate(0, 10)
-        self._grid_panel.SetBackgroundColour(CLR_BG)
-        self._grid_sizer = wx.WrapSizer(wx.HORIZONTAL)
-        self._grid_panel.SetSizer(self._grid_sizer)
-        root.Add(self._grid_panel, 1, wx.EXPAND | wx.ALL, 10)
+        self._grid = GaugeGrid(self)
+        self._grid.set_order_changed_callback(self._save_prefs)
+        root.Add(self._grid, 1, wx.EXPAND | wx.ALL, 10)
 
         self.SetSizer(root)
 
@@ -296,11 +572,9 @@ class MainPanel(wx.Panel):
     def _on_scan(self, _):
         self._scan_btn.SetLabel("…")
         self._scan_btn.Enable(False)
-
         def _scan():
             interfaces = scan_interfaces()
             wx.CallAfter(self._apply_scan, interfaces)
-
         threading.Thread(target=_scan, daemon=True).start()
 
     def _apply_scan(self, interfaces):
@@ -316,7 +590,7 @@ class MainPanel(wx.Panel):
         self._scan_btn.Enable(True)
         self.Layout()
 
-    # ── Event handlers ────────────────────────────────────────────────────────
+    # ── Connect / stop ────────────────────────────────────────────────────────
 
     def _browse_path(self, _):
         dlg = wx.DirDialog(self, "Select log folder", style=wx.DD_DEFAULT_STYLE)
@@ -327,7 +601,7 @@ class MainPanel(wx.Panel):
     def _on_connect(self, _):
         idx = self._device_choice.GetSelection()
         if idx < 0 or idx >= len(self._iface_list):
-            wx.MessageBox("Please select a device first.", "No device selected", wx.OK | wx.ICON_WARNING)
+            wx.MessageBox("Please select a device first.", "No device", wx.OK | wx.ICON_WARNING)
             return
 
         _, iface_type, iface_path = self._iface_list[idx]
@@ -348,11 +622,12 @@ class MainPanel(wx.Panel):
         self._connect_btn.Enable(False)
         self._stop_btn.Enable(True)
         self._log_toggle_btn.Enable(True)
+        self._select_params_btn.Enable(True)
         self._set_status("Connecting…", CLR_MUTED)
 
         self._thread = threading.Thread(target=self._run_logger, daemon=True)
         self._thread.start()
-        self._ui_timer.Start(100)  # 10fps
+        self._ui_timer.Start(100)
 
     def _run_logger(self):
         try:
@@ -361,7 +636,48 @@ class MainPanel(wx.Panel):
             wx.CallAfter(self._set_status, "Error: " + str(e), CLR_RED)
             wx.CallAfter(self._reset_buttons)
 
-    # ── Timer-driven UI update (replaces wx.CallAfter flooding) ──────────────
+    def _on_stop(self, _):
+        self._ui_timer.Stop()
+        if self._logger:
+            self._logger.stop()
+        self._reset_buttons()
+        self._set_status("Disconnected", CLR_MUTED)
+        self._logging_text.SetLabel("")
+
+    def _on_toggle_log(self, _):
+        if self._logger:
+            self._logger.toggle_key_trigger()
+
+    def _reset_buttons(self):
+        self._connect_btn.Enable(True)
+        self._stop_btn.Enable(False)
+        self._log_toggle_btn.Enable(False)
+        self._select_params_btn.Enable(False)
+
+    # ── Param selection ───────────────────────────────────────────────────────
+
+    def _on_select_params(self, _):
+        if not self._all_params:
+            wx.MessageBox("No parameters received yet — wait for data.", "No data", wx.OK | wx.ICON_INFORMATION)
+            return
+        dlg = ParamSelectorDialog(self, sorted(self._all_params), self._selected)
+        if dlg.ShowModal() == wx.ID_OK:
+            self._selected = dlg.get_selected()
+            self._prefs["selected"] = list(self._selected)
+            self._apply_selection()
+            _save_prefs(self._prefs)
+        dlg.Destroy()
+
+    def _apply_selection(self):
+        # restore saved order, append any new names at end
+        saved_order = self._prefs.get("order", [])
+        ordered = [n for n in saved_order if n in self._selected]
+        for n in self._selected:
+            if n not in ordered:
+                ordered.append(n)
+        self._grid.set_params(ordered, self._prefs)
+
+    # ── Timer UI update ───────────────────────────────────────────────────────
 
     def _on_ui_timer(self, _):
         if self._logger is None:
@@ -374,52 +690,42 @@ class MainPanel(wx.Panel):
             self._reset_buttons()
             return
 
-        data = dict(self._logger.data_stream)  # snapshot to avoid races
+        data = dict(self._logger.data_stream)
+
+        # discover new params
+        new_found = False
+        for v in data.values():
+            if isinstance(v, dict):
+                name = v.get("Name", "")
+                if name and name not in ("Time", "isLogging") and name not in self._all_params:
+                    self._all_params.append(name)
+                    new_found = True
+
+        # on first data, auto-select from saved prefs or select all
+        if new_found and not self._selected:
+            saved = set(self._prefs.get("selected", []))
+            self._selected = saved & set(self._all_params) if saved else set(self._all_params)
+            self._apply_selection()
 
         is_logging = data.get("isLogging", {}).get("Value") == "True"
-
         self._set_status("Connected — polling", CLR_GREEN)
         self._logging_text.SetLabel("● LOGGING" if is_logging else "")
 
-        rebuilt = False
-        self._grid_panel.Freeze()
+        self._grid.Freeze()
         try:
-            for key, entry in data.items():
-                if key in ("Time", "isLogging"):
-                    continue
-                name = entry.get("Name", str(key))
-                val  = entry.get("Value", "—")
-                if name not in self._cards:
-                    card = GaugeCard(self._grid_panel, name, "")
-                    self._cards[name] = card
-                    self._grid_sizer.Add(card, 0, wx.ALL, 5)
-                    rebuilt = True
-                self._cards[name].update(val, is_logging)
+            self._grid.update(data, is_logging)
         finally:
-            self._grid_panel.Thaw()
+            self._grid.Thaw()
 
-        if rebuilt:
-            self._grid_panel.Layout()
-            self._grid_sizer.FitInside(self._grid_panel)
+    # ── Prefs save ────────────────────────────────────────────────────────────
 
-        print(f"UI tick done, cards={len(self._cards)}", flush=True)
+    def _save_prefs(self, order):
+        self._prefs["order"]    = order
+        self._prefs["selected"] = list(self._selected)
+        self._prefs["colors"]   = self._grid.get_colors()
+        _save_prefs(self._prefs)
 
-    def _on_toggle_log(self, _):
-        if self._logger:
-            self._logger.toggle_key_trigger()
-
-    def _on_stop(self, _):
-        self._ui_timer.Stop()
-        if self._logger:
-            self._logger.stop()
-        self._reset_buttons()
-        self._set_status("Disconnected", CLR_MUTED)
-        self._logging_text.SetLabel("")
-
-    def _reset_buttons(self):
-        self._connect_btn.Enable(True)
-        self._stop_btn.Enable(False)
-        self._log_toggle_btn.Enable(False)
+    # ── Status ────────────────────────────────────────────────────────────────
 
     def _set_status(self, text, color):
         if text == self._last_status:
