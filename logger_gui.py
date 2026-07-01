@@ -269,9 +269,11 @@ class GaugeCanvas(wx.Panel):
         _t2 = _t.perf_counter()
         dc.SetPen(self._pen_none)
 
+        _t_rect = _t_font = _t_text = 0.0
         for i, name in enumerate(self._order):
             r = self._card_rect(i)
 
+            _ta = _t.perf_counter()
             if self._is_logging:
                 dc.SetBrush(self._brush_log)
             elif self._colors.get(name):
@@ -283,24 +285,30 @@ class GaugeCanvas(wx.Panel):
             else:
                 dc.SetBrush(self._brush_surf)
             dc.DrawRectangle(r.x, r.y, CARD_W, CARD_H)
-
             dc.SetBrush(self._brush_acc if i == self._drop_idx else self._brush_bdr)
             dc.DrawRectangle(r.x, r.y, CARD_W, 5)
+            _tb = _t.perf_counter()
 
             dc.SetFont(self._font_name)
             dc.SetTextForeground(CLR_MUTED)
             label = self._upper.get(name, name)
             tw, _ = dc.GetTextExtent(label)
-            dc.DrawText(label, r.x + (CARD_W - tw) // 2, r.y + 10)
+            _tc = _t.perf_counter()
 
+            dc.DrawText(label, r.x + (CARD_W - tw) // 2, r.y + 10)
             dc.SetFont(self._font_value)
             dc.SetTextForeground(CLR_TEXT)
             val = self._values.get(name, "—")
             tw, _ = dc.GetTextExtent(val)
             dc.DrawText(val, r.x + (CARD_W - tw) // 2, r.y + 28)
+            _td = _t.perf_counter()
+
+            _t_rect += _tb - _ta
+            _t_font += _tc - _tb
+            _t_text += _td - _tc
 
         _t3 = _t.perf_counter()
-        print(f"paint {len(self._order)} cards: total={(_t3-_t0)*1000:.1f}ms  dc_create={(_t1-_t0)*1000:.1f}ms  clear={(_t2-_t1)*1000:.1f}ms  draw={(_t3-_t2)*1000:.1f}ms", flush=True)
+        print(f"paint {len(self._order)}: total={(_t3-_t0)*1000:.0f}ms  rects={_t_rect*1000:.0f}ms  GetTextExtent={_t_font*1000:.0f}ms  DrawText={_t_text*1000:.0f}ms", flush=True)
 
     def _on_size(self, _):
         self._recalc_virtual_size()
