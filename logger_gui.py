@@ -362,11 +362,22 @@ class GaugeView:
         self._wv.SetPage(GAUGE_HTML, "")
         self._wv.Bind(wx.html2.EVT_WEBVIEW_LOADED, self._on_loaded)
 
+    def _run(self, script):
+        try:
+            ok, result = self._wv.RunScript(script)
+            if not ok:
+                print(f"RunScript failed: {result!r}", flush=True)
+            return ok, result
+        except Exception as e:
+            print(f"RunScript exception: {e}", flush=True)
+            return False, ""
+
     def _on_loaded(self, _):
         if self._ready:
             return
         self._ready = True
-        self._wv.RunScript("""
+        print("WebView loaded", flush=True)
+        self._run("""
             window.onOrderChanged = function(order) {
                 window.wx_order_changed = JSON.stringify(order);
             };
@@ -382,29 +393,25 @@ class GaugeView:
     def set_params(self, order, colors):
         self._order  = list(order)
         self._colors = dict(colors)
+        print(f"set_params: ready={self._ready} order={order}", flush=True)
         if not self._ready:
             self._pending_params = (order, colors)
             return
         self._pending_params = None
-        order_js  = json.dumps(order)
-        colors_js = json.dumps(colors)
-        self._wv.RunScript(f"setParams({order_js}, {colors_js});")
+        self._run(f"setParams({json.dumps(order)}, {json.dumps(colors)});")
 
     def update(self, by_name, is_logging):
         if not self._ready:
             return
         self._is_logging = is_logging
-        # only pass values for params we're showing
         filtered = {n: by_name[n] for n in self._order if n in by_name}
-        by_name_js  = json.dumps(filtered)
-        is_log_js   = "true" if is_logging else "false"
-        self._wv.RunScript(f"update({by_name_js}, {is_log_js});")
+        self._run(f"update({json.dumps(filtered)}, {'true' if is_logging else 'false'});")
         self._poll_js_changes()
 
     def _poll_js_changes(self):
-        ok, val = self._wv.RunScript("window.wx_order_changed || ''")
+        ok, val = self._run("window.wx_order_changed || ''")
         if ok and val and val not in ("''", ""):
-            self._wv.RunScript("window.wx_order_changed = null;")
+            self._run("window.wx_order_changed = null;")
             try:
                 order = json.loads(val)
                 self._order = order
@@ -412,9 +419,9 @@ class GaugeView:
             except Exception:
                 pass
 
-        ok, val = self._wv.RunScript("window.wx_color_changed || ''")
+        ok, val = self._run("window.wx_color_changed || ''")
         if ok and val and val not in ("''", ""):
-            self._wv.RunScript("window.wx_color_changed = null;")
+            self._run("window.wx_color_changed = null;")
             try:
                 data = json.loads(val)
                 self._colors[data["name"]] = data["color"]
