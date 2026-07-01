@@ -156,17 +156,15 @@ class ParamSelectorDialog(wx.Dialog):
 
 # ── GaugeCanvas — single panel draws ALL cards ───────────────────────────────
 
-class GaugeCanvas(wx.ScrolledWindow):
+class GaugeCanvas(wx.Panel):
     """
-    Draws every gauge card itself in one OnPaint call.
-    No child widgets — zero per-card widget overhead.
+    Draws every gauge card in one OnPaint call.
+    Plain Panel — no scroll machinery overhead.
     """
 
     def __init__(self, parent, on_prefs_changed):
         super().__init__(parent, style=wx.BORDER_NONE)
         self.SetBackgroundStyle(wx.BG_STYLE_PAINT)
-        self.SetScrollRate(0, 10)
-        self.SetBackgroundColour(CLR_BG)
 
         self._on_prefs_changed = on_prefs_changed  # callback(order)
 
@@ -232,10 +230,7 @@ class GaugeCanvas(wx.ScrolledWindow):
         return max(1, (w + CARD_PAD) // (CARD_W + CARD_PAD))
 
     def _recalc_virtual_size(self):
-        cols  = self._cols()
-        rows  = max(1, (len(self._order) + cols - 1) // cols)
-        total = rows * (CARD_H + CARD_PAD) + CARD_PAD
-        self.SetVirtualSize((-1, total))
+        pass  # no scrolling
 
     def _card_rect(self, idx):
         cols = self._cols()
@@ -244,60 +239,39 @@ class GaugeCanvas(wx.ScrolledWindow):
         y = CARD_PAD + row * (CARD_H + CARD_PAD)
         return wx.Rect(x, y, CARD_W, CARD_H)
 
-    def _idx_at(self, canvas_pos):
-        for i, name in enumerate(self._order):
-            if self._card_rect(i).Contains(canvas_pos):
+    def _idx_at(self, pos):
+        for i in range(len(self._order)):
+            if self._card_rect(i).Contains(pos):
                 return i
         return None
 
     def _screen_to_canvas(self, screen_pt):
-        client_pt = self.ScreenToClient(screen_pt)
-        vx, vy    = self.GetViewStart()
-        ux, uy    = self.GetScrollPixelsPerUnit()
-        return wx.Point(client_pt.x + vx * ux, client_pt.y + vy * uy)
+        return self.ScreenToClient(screen_pt)
 
     # ── Paint ─────────────────────────────────────────────────────────────────
 
     def _on_paint(self, _):
-        import time as _time
-        t0 = _time.perf_counter()
-
         if self._font_name is None:
-            self._font_name   = wx.Font(7,  wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL)
-            self._font_value  = wx.Font(16, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD)
-            self._brush_bg    = wx.Brush(CLR_BG)
-            self._brush_surf  = wx.Brush(CLR_SURFACE)
-            self._brush_log   = wx.Brush(CLR_LOG_BG)
-            self._brush_bdr   = wx.Brush(CLR_BORDER)
-            self._brush_acc   = wx.Brush(CLR_ACCENT)
-            self._pen_none    = wx.TRANSPARENT_PEN
+            self._font_name  = wx.Font(7,  wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL)
+            self._font_value = wx.Font(16, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD)
+            self._brush_bg   = wx.Brush(CLR_BG)
+            self._brush_surf = wx.Brush(CLR_SURFACE)
+            self._brush_log  = wx.Brush(CLR_LOG_BG)
+            self._brush_bdr  = wx.Brush(CLR_BORDER)
+            self._brush_acc  = wx.Brush(CLR_ACCENT)
+            self._pen_none   = wx.TRANSPARENT_PEN
 
         dc = wx.PaintDC(self)
         dc.SetBackground(self._brush_bg)
         dc.Clear()
         dc.SetPen(self._pen_none)
 
-        # manual scroll offset
-        vx, vy = self.GetViewStart()
-        ux, uy = self.GetScrollPixelsPerUnit()
-        ox, oy = vx * ux, vy * uy
-
-        cw, ch = self.GetClientSize()
-
         for i, name in enumerate(self._order):
-            r  = self._card_rect(i)
-            rx = r.x - ox
-            ry = r.y - oy
-
-            # skip cards outside visible area
-            if ry + CARD_H < 0 or ry > ch:
-                continue
-
-            is_dt = (i == self._drop_idx)
+            r = self._card_rect(i)
 
             if self._is_logging:
                 dc.SetBrush(self._brush_log)
-            elif name in self._colors and self._colors[name]:
+            elif self._colors.get(name):
                 clr = self._colors[name]
                 key = clr.GetRGB()
                 if key not in self._brush_cache:
@@ -305,24 +279,22 @@ class GaugeCanvas(wx.ScrolledWindow):
                 dc.SetBrush(self._brush_cache[key])
             else:
                 dc.SetBrush(self._brush_surf)
-            dc.DrawRectangle(rx, ry, CARD_W, CARD_H)
+            dc.DrawRectangle(r.x, r.y, CARD_W, CARD_H)
 
-            dc.SetBrush(self._brush_acc if is_dt else self._brush_bdr)
-            dc.DrawRectangle(rx, ry, CARD_W, 5)
+            dc.SetBrush(self._brush_acc if i == self._drop_idx else self._brush_bdr)
+            dc.DrawRectangle(r.x, r.y, CARD_W, 5)
 
             dc.SetFont(self._font_name)
             dc.SetTextForeground(CLR_MUTED)
             label = self._upper.get(name, name)
             tw, _ = dc.GetTextExtent(label)
-            dc.DrawText(label, rx + (CARD_W - tw) // 2, ry + 10)
+            dc.DrawText(label, r.x + (CARD_W - tw) // 2, r.y + 10)
 
             dc.SetFont(self._font_value)
             dc.SetTextForeground(CLR_TEXT)
             val = self._values.get(name, "—")
             tw, _ = dc.GetTextExtent(val)
-            dc.DrawText(val, rx + (CARD_W - tw) // 2, ry + 28)
-
-        print(f"paint {len(self._order)} cards: {(_time.perf_counter()-t0)*1000:.1f}ms", flush=True)
+            dc.DrawText(val, r.x + (CARD_W - tw) // 2, r.y + 28)
 
     def _on_size(self, _):
         self._recalc_virtual_size()
@@ -616,8 +588,6 @@ class MainPanel(wx.Panel):
     # ── Timer UI update ───────────────────────────────────────────────────────
 
     def _on_ui_timer(self, _):
-        import time as _time
-        t0 = _time.perf_counter()
         if self._logger is None:
             return
         if self._logger.kill:
@@ -649,10 +619,10 @@ class MainPanel(wx.Panel):
 
         is_logging = by_name.get("isLogging", "False") == "True"
         self._set_status("Connected — polling", CLR_GREEN)
-        self._logging_text.SetLabel("● LOGGING" if is_logging else "")
+        log_label = "● LOGGING" if is_logging else ""
+        if log_label != self._logging_text.GetLabel():
+            self._logging_text.SetLabel(log_label)
         self._canvas.update(by_name, is_logging)
-        import time as _time
-        print(f"timer cb: {(_time.perf_counter()-t0)*1000:.1f}ms", flush=True)
 
     # ── Prefs save ────────────────────────────────────────────────────────────
 
