@@ -59,6 +59,7 @@ class LoggerCore:
         self.log_prefix   = "Logging_"
         self.log_trigger  = ""
         self.current_time = datetime.now().strftime("%Y%m%d-%H%M%S")
+        self._last_ui_push = 0.0   # throttle UI callbacks to ~10fps
 
         # HP/TQ calc defaults
         self.calc_hp          = 0
@@ -244,9 +245,9 @@ class LoggerCore:
 
         self._notify("Connected — polling")
 
+        # Just wait for stop() — all work happens in daemon threads
         while not self.kill:
-            self._notify("Logger running", self.data_stream)
-            time.sleep(0.2)
+            time.sleep(0.1)
 
         self._notify("Stopped")
 
@@ -457,6 +458,11 @@ class LoggerCore:
     def _write_csv(self, row):
         self.data_stream = self._stream_buf
         self.data_row    = row
+
+        now = time.time()
+        if now - self._last_ui_push >= 0.1:
+            self._last_ui_push = now
+            self._notify("Connected — polling")
 
         if not self.is_logging:
             return
