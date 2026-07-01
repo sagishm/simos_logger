@@ -171,16 +171,19 @@ class GaugeCanvas(wx.ScrolledWindow):
         self._on_prefs_changed = on_prefs_changed  # callback(order)
 
         # per-gauge state
-        self._order      = []          # list of names in display order
-        self._values     = {}          # name → value string
-        self._colors     = {}          # name → wx.Colour or None
+        self._order      = []
+        self._values     = {}
+        self._colors     = {}
+        self._upper      = {}
+        self._name_extents = {}   # name → (tw, th) for label
         self._is_logging = False
         self._drag_name  = None        # name of card being dragged
         self._drop_idx   = None        # drop target index
         self._rects      = {}          # name → wx.Rect (updated each paint)
 
-        self._font_name  = None        # created lazily
-        self._font_value = None
+        self._font_name   = None        # created lazily
+        self._font_value  = None
+        self._brush_cache = {}          # wx.Colour key → wx.Brush
 
         self.Bind(wx.EVT_PAINT,       self._on_paint)
         self.Bind(wx.EVT_SIZE,        self._on_size)
@@ -192,9 +195,11 @@ class GaugeCanvas(wx.ScrolledWindow):
     # ── Public API ────────────────────────────────────────────────────────────
 
     def set_params(self, order, colors):
-        self._order  = list(order)
-        self._colors = {n: wx.Colour(*c) if c else None for n, c in colors.items()}
-        self._values = {n: self._values.get(n, "—") for n in order}
+        self._order      = list(order)
+        self._colors     = {n: wx.Colour(*c) if c else None for n, c in colors.items()}
+        self._values     = {n: self._values.get(n, "—") for n in order}
+        self._upper      = {n: n.upper() for n in order}   # cache uppercased labels
+        self._brush_cache = {}
         self._recalc_virtual_size()
         self.Refresh()
 
@@ -255,38 +260,46 @@ class GaugeCanvas(wx.ScrolledWindow):
 
     def _on_paint(self, _):
         if self._font_name is None:
-            self._font_name  = wx.Font(7,  wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL)
-            self._font_value = wx.Font(16, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD)
+            self._font_name   = wx.Font(7,  wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL)
+            self._font_value  = wx.Font(16, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD)
+            self._brush_bg    = wx.Brush(CLR_BG)
+            self._brush_surf  = wx.Brush(CLR_SURFACE)
+            self._brush_log   = wx.Brush(CLR_LOG_BG)
+            self._brush_bdr   = wx.Brush(CLR_BORDER)
+            self._brush_acc   = wx.Brush(CLR_ACCENT)
+            self._pen_none    = wx.TRANSPARENT_PEN
 
         dc = wx.AutoBufferedPaintDC(self)
         self.DoPrepareDC(dc)
-        dc.SetBackground(wx.Brush(CLR_BG))
+        dc.SetBackground(self._brush_bg)
         dc.Clear()
+        dc.SetPen(self._pen_none)
 
         for i, name in enumerate(self._order):
             r     = self._card_rect(i)
             is_dt = (i == self._drop_idx)
 
-            # card background
+            # card background — reuse cached brush, only create one for custom colors
             if self._is_logging:
-                bg = CLR_LOG_BG
+                dc.SetBrush(self._brush_log)
             elif name in self._colors and self._colors[name]:
-                bg = self._colors[name]
+                clr = self._colors[name]
+                key = clr.GetRGB()
+                if key not in self._brush_cache:
+                    self._brush_cache[key] = wx.Brush(clr)
+                dc.SetBrush(self._brush_cache[key])
             else:
-                bg = CLR_SURFACE
-
-            dc.SetPen(wx.TRANSPARENT_PEN)
-            dc.SetBrush(wx.Brush(bg))
+                dc.SetBrush(self._brush_surf)
             dc.DrawRectangle(r)
 
             # drag handle strip
-            dc.SetBrush(wx.Brush(CLR_ACCENT if is_dt else CLR_BORDER))
+            dc.SetBrush(self._brush_acc if is_dt else self._brush_bdr)
             dc.DrawRectangle(r.x, r.y, r.width, 5)
 
             # name
             dc.SetFont(self._font_name)
             dc.SetTextForeground(CLR_MUTED)
-            label = name.upper()
+            label = self._upper.get(name, name)
             tw, _ = dc.GetTextExtent(label)
             dc.DrawText(label, r.x + (r.width - tw) // 2, r.y + 10)
 
