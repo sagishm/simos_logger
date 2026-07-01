@@ -592,6 +592,12 @@ class MainPanel(wx.Panel):
         _, iface_type, iface_path = self._iface_list[idx]
         log_path = self._path_text.GetValue()
         os.makedirs(log_path, exist_ok=True)
+
+        # reset session state
+        self._all_params = []
+        self._selected   = set()
+        self._initial_apply_pending = False
+
         self._logger = LoggerCore(
             interface=iface_type,
             interface_path=iface_path,
