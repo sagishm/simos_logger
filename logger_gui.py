@@ -402,6 +402,8 @@ class MainPanel(wx.Panel):
             self._grid_panel.Layout()
             self._grid_sizer.FitInside(self._grid_panel)
 
+        print(f"UI tick done, cards={len(self._cards)}", flush=True)
+
     def _on_toggle_log(self, _):
         if self._logger:
             self._logger.toggle_key_trigger()

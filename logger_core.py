@@ -254,6 +254,7 @@ class LoggerCore:
     def _poll_loop(self):
         self.log_file  = None
         next_frame     = time.time()
+        _poll_count    = 0
 
         while not self.kill:
             now = time.time()
@@ -274,8 +275,12 @@ class LoggerCore:
                     self.log_file.flush()
 
                 self._check_logging()
+
+                _poll_count += 1
+                if _poll_count % 20 == 0:
+                    print(f"Poll #{_poll_count}, stream={len(self.data_stream)} keys", flush=True)
             else:
-                time.sleep(0.001)  # yield to GUI thread when waiting for next frame
+                time.sleep(0.001)
 
     # ── Parameter reading ─────────────────────────────────────────────────────
 
