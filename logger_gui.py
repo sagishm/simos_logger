@@ -259,6 +259,9 @@ class GaugeCanvas(wx.ScrolledWindow):
     # ── Paint ─────────────────────────────────────────────────────────────────
 
     def _on_paint(self, _):
+        import time as _time
+        t0 = _time.perf_counter()
+
         if self._font_name is None:
             self._font_name   = wx.Font(7,  wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL)
             self._font_value  = wx.Font(16, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD)
@@ -309,6 +312,8 @@ class GaugeCanvas(wx.ScrolledWindow):
             val = self._values.get(name, "—")
             tw, th = dc.GetTextExtent(val)
             dc.DrawText(val, r.x + (r.width - tw) // 2, r.y + 28)
+
+        print(f"paint {len(self._order)} cards: {(_time.perf_counter()-t0)*1000:.1f}ms", flush=True)
 
     def _on_size(self, _):
         self._recalc_virtual_size()
@@ -602,6 +607,8 @@ class MainPanel(wx.Panel):
     # ── Timer UI update ───────────────────────────────────────────────────────
 
     def _on_ui_timer(self, _):
+        import time as _time
+        t0 = _time.perf_counter()
         if self._logger is None:
             return
         if self._logger.kill:
@@ -635,6 +642,8 @@ class MainPanel(wx.Panel):
         self._set_status("Connected — polling", CLR_GREEN)
         self._logging_text.SetLabel("● LOGGING" if is_logging else "")
         self._canvas.update(by_name, is_logging)
+        import time as _time
+        print(f"timer cb: {(_time.perf_counter()-t0)*1000:.1f}ms", flush=True)
 
     # ── Prefs save ────────────────────────────────────────────────────────────
 
