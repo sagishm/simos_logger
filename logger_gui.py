@@ -361,7 +361,8 @@ class ParamSelectorDialog(wx.Dialog):
 
 class GaugeView:
     def __init__(self, parent, on_order_changed, on_color_changed):
-        self._wv = wx.html2.WebView.New(parent)
+        self._wv = wx.html2.WebView.New(parent, style=wx.BORDER_NONE)
+        self._wv.SetBackgroundColour(wx.Colour(15, 17, 23))
         self.widget = self._wv  # expose for sizer
         self._on_order_changed = on_order_changed
         self._on_color_changed = on_color_changed
