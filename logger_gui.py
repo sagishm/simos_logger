@@ -75,6 +75,7 @@ GAUGE_HTML = """<!DOCTYPE html>
     text-align: center;
     padding: 0 4px 2px;
   }
+  .card .value {
     font-size: 22px;
     font-weight: 700;
     color: #e2e8f0;
@@ -470,6 +471,7 @@ class MainPanel(wx.Panel):
         self._last_status = ""
         self._all_params  = []
         self._selected    = set()
+        self._params_applied = False
         self._prefs       = _load_prefs()
         self._initial_apply_pending = False
 
@@ -616,6 +618,7 @@ class MainPanel(wx.Panel):
         # reset session state
         self._all_params = []
         self._selected   = set()
+        self._params_applied = False
         self._initial_apply_pending = False
 
         self._logger = LoggerCore(
@@ -719,8 +722,9 @@ class MainPanel(wx.Panel):
                 self._all_params.append(name)
                 new_found = True
 
-        if new_found and not self._selected:
+        if new_found and not self._params_applied:
             self._initial_apply()
+            self._params_applied = True
 
         is_logging = by_name.get("isLogging", "False") == "True"
         self._set_status("Connected — polling", CLR_GREEN)
