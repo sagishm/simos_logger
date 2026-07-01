@@ -272,17 +272,29 @@ class GaugeCanvas(wx.ScrolledWindow):
             self._brush_acc   = wx.Brush(CLR_ACCENT)
             self._pen_none    = wx.TRANSPARENT_PEN
 
-        dc = wx.AutoBufferedPaintDC(self)
-        self.DoPrepareDC(dc)
+        dc = wx.PaintDC(self)
         dc.SetBackground(self._brush_bg)
         dc.Clear()
         dc.SetPen(self._pen_none)
 
+        # manual scroll offset
+        vx, vy = self.GetViewStart()
+        ux, uy = self.GetScrollPixelsPerUnit()
+        ox, oy = vx * ux, vy * uy
+
+        cw, ch = self.GetClientSize()
+
         for i, name in enumerate(self._order):
-            r     = self._card_rect(i)
+            r  = self._card_rect(i)
+            rx = r.x - ox
+            ry = r.y - oy
+
+            # skip cards outside visible area
+            if ry + CARD_H < 0 or ry > ch:
+                continue
+
             is_dt = (i == self._drop_idx)
 
-            # card background — reuse cached brush, only create one for custom colors
             if self._is_logging:
                 dc.SetBrush(self._brush_log)
             elif name in self._colors and self._colors[name]:
@@ -293,25 +305,22 @@ class GaugeCanvas(wx.ScrolledWindow):
                 dc.SetBrush(self._brush_cache[key])
             else:
                 dc.SetBrush(self._brush_surf)
-            dc.DrawRectangle(r)
+            dc.DrawRectangle(rx, ry, CARD_W, CARD_H)
 
-            # drag handle strip
             dc.SetBrush(self._brush_acc if is_dt else self._brush_bdr)
-            dc.DrawRectangle(r.x, r.y, r.width, 5)
+            dc.DrawRectangle(rx, ry, CARD_W, 5)
 
-            # name
             dc.SetFont(self._font_name)
             dc.SetTextForeground(CLR_MUTED)
             label = self._upper.get(name, name)
             tw, _ = dc.GetTextExtent(label)
-            dc.DrawText(label, r.x + (r.width - tw) // 2, r.y + 10)
+            dc.DrawText(label, rx + (CARD_W - tw) // 2, ry + 10)
 
-            # value
             dc.SetFont(self._font_value)
             dc.SetTextForeground(CLR_TEXT)
             val = self._values.get(name, "—")
-            tw, th = dc.GetTextExtent(val)
-            dc.DrawText(val, r.x + (r.width - tw) // 2, r.y + 28)
+            tw, _ = dc.GetTextExtent(val)
+            dc.DrawText(val, rx + (CARD_W - tw) // 2, ry + 28)
 
         print(f"paint {len(self._order)} cards: {(_time.perf_counter()-t0)*1000:.1f}ms", flush=True)
 
