@@ -274,6 +274,8 @@ class LoggerCore:
                     self.log_file.flush()
 
                 self._check_logging()
+            else:
+                time.sleep(0.001)  # yield to GUI thread when waiting for next frame
 
     # ── Parameter reading ─────────────────────────────────────────────────────
 
@@ -483,24 +485,27 @@ class LoggerCore:
     # ── TCP stream (for logger_viewer.html) ───────────────────────────────────
 
     def _stream_server(self):
+        import select
         HOST, PORT = "127.0.0.1", 65432
         self._log.info("Starting TCP stream on %s:%d", HOST, PORT)
-        srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        srv.settimeout(1.0)          # unblock accept() every second to check self.kill
         try:
+            srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             srv.bind((HOST, PORT))
             srv.listen()
+            srv.setblocking(False)
         except Exception as e:
             self._log.error("Stream server bind failed: %s", e)
             return
+
         while not self.kill:
+            ready, _, _ = select.select([srv], [], [], 0.5)
+            if not ready:
+                continue
             try:
                 conn, addr = srv.accept()
-            except socket.timeout:
-                continue
             except Exception:
-                break
+                continue
             self._log.info("Stream client connected: %s", addr)
             try:
                 conn.sendall(

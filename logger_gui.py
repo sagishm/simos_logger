@@ -140,7 +140,7 @@ class GaugeCard(wx.Panel):
             changed = True
 
         if changed:
-            self.Refresh()
+            self._value_lbl.Refresh()  # only repaint the label, not the whole card
 
     def _on_right_click(self, _):
         menu = wx.Menu()
@@ -210,7 +210,7 @@ class MainPanel(wx.Panel):
 
         # TCP stream toggle
         self._stream_chk = wx.CheckBox(ctrl_panel, label="Stream :65432")
-        self._stream_chk.SetValue(True)
+        self._stream_chk.SetValue(False)
         row1.Add(self._stream_chk, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 16)
 
         row1.AddStretchSpacer()
@@ -367,31 +367,36 @@ class MainPanel(wx.Panel):
         if self._logger is None:
             return
 
-        data = self._logger.data_stream
-
-        is_logging = data.get("isLogging", {}).get("Value") == "True"
-        self._logging_text.SetLabel("● LOGGING" if is_logging else "")
-
         if self._logger.kill:
             self._ui_timer.Stop()
             self._set_status("Stopped", CLR_MUTED)
+            self._logging_text.SetLabel("")
             self._reset_buttons()
             return
 
+        data = dict(self._logger.data_stream)  # snapshot to avoid races
+
+        is_logging = data.get("isLogging", {}).get("Value") == "True"
+
         self._set_status("Connected — polling", CLR_GREEN)
+        self._logging_text.SetLabel("● LOGGING" if is_logging else "")
 
         rebuilt = False
-        for key, entry in data.items():
-            if key in ("Time", "isLogging"):
-                continue
-            name = entry.get("Name", str(key))
-            val  = entry.get("Value", "—")
-            if name not in self._cards:
-                card = GaugeCard(self._grid_panel, name, "")
-                self._cards[name] = card
-                self._grid_sizer.Add(card, 0, wx.ALL, 5)
-                rebuilt = True
-            self._cards[name].update(val, is_logging)
+        self._grid_panel.Freeze()
+        try:
+            for key, entry in data.items():
+                if key in ("Time", "isLogging"):
+                    continue
+                name = entry.get("Name", str(key))
+                val  = entry.get("Value", "—")
+                if name not in self._cards:
+                    card = GaugeCard(self._grid_panel, name, "")
+                    self._cards[name] = card
+                    self._grid_sizer.Add(card, 0, wx.ALL, 5)
+                    rebuilt = True
+                self._cards[name].update(val, is_logging)
+        finally:
+            self._grid_panel.Thaw()
 
         if rebuilt:
             self._grid_panel.Layout()
