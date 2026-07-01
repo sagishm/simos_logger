@@ -10,9 +10,6 @@ import sys
 from logger_core import LoggerCore
 
 DEFAULT_LOG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
-DEFAULT_J2534_DLL = (
-    "C:/Program Files (x86)/OpenECU/OpenPort 2.0/drivers/openport 2.0/op20pt32.dll"
-)
 
 
 # ── Colour constants ──────────────────────────────────────────────────────────
@@ -26,13 +23,63 @@ CLR_RED     = wx.Colour(239, 68,  68)
 CLR_ACCENT  = wx.Colour(79,  156, 249)
 
 
-class GaugeCard(wx.Panel):
-    """Single live-value card in the gauge grid."""
+# ── Interface scanner (ported from VW_Flash_GUI.py) ───────────────────────────
 
+def _scan_j2534_registry():
+    """Read installed J2534 devices from Windows registry. Returns list of (name, dll_path)."""
+    devices = []
+    if sys.platform != "win32":
+        return devices
+    try:
+        import winreg
+        base = winreg.OpenKeyEx(winreg.HKEY_LOCAL_MACHINE, r"Software\PassThruSupport.04.04\\")
+        for i in range(winreg.QueryInfoKey(base)[0]):
+            try:
+                key  = winreg.OpenKeyEx(base, winreg.EnumKey(base, i))
+                name = winreg.QueryValueEx(key, "Name")[0]
+                dll  = winreg.QueryValueEx(key, "FunctionLibrary")[0]
+                devices.append((name, dll))
+            except OSError:
+                pass
+    except OSError:
+        pass
+    return devices
+
+
+def scan_interfaces():
+    """
+    Returns a list of (display_label, interface_type, interface_path) tuples.
+    interface_type is "J2534", "SocketCAN", or "USBISOTP".
+    interface_path is the DLL path, CAN interface name, or serial port.
+    """
+    results = []
+
+    # J2534 devices from Windows registry
+    for name, dll in _scan_j2534_registry():
+        results.append((f"J2534 — {name}", "J2534", dll))
+
+    # SocketCAN on Linux
+    if sys.platform == "linux":
+        results.append(("SocketCAN — can0", "SocketCAN", "can0"))
+
+    # Serial ports (USB-ISOTP adapters)
+    try:
+        import serial.tools.list_ports
+        for port in serial.tools.list_ports.comports():
+            label = f"USB-ISOTP — {port.name} : {port.description}"
+            results.append((label, "USBISOTP", port.device))
+    except Exception:
+        pass
+
+    return results
+
+
+# ── Gauge card ────────────────────────────────────────────────────────────────
+
+class GaugeCard(wx.Panel):
     def __init__(self, parent, name, unit):
         super().__init__(parent, style=wx.BORDER_NONE)
-        self.name  = name
-        self.unit  = unit
+        self.name        = name
         self._mark_color = None
 
         self.SetBackgroundColour(CLR_SURFACE)
@@ -55,9 +102,8 @@ class GaugeCard(wx.Panel):
         self.SetSizer(sizer)
         self.SetMinSize((140, 80))
 
-        self.Bind(wx.EVT_RIGHT_DOWN, self._on_right_click)
-        self._name_lbl.Bind(wx.EVT_RIGHT_DOWN, self._on_right_click)
-        self._value_lbl.Bind(wx.EVT_RIGHT_DOWN, self._on_right_click)
+        for w in (self, self._name_lbl, self._value_lbl, self._unit_lbl):
+            w.Bind(wx.EVT_RIGHT_DOWN, self._on_right_click)
 
     def update(self, value, logging_active):
         self._value_lbl.SetLabel(str(value))
@@ -70,16 +116,15 @@ class GaugeCard(wx.Panel):
         self.Refresh()
 
     def _on_right_click(self, _):
-        menu   = wx.Menu()
-        colors = [
+        menu = wx.Menu()
+        for label, color in [
             ("Red",    wx.Colour(80, 20, 20)),
             ("Orange", wx.Colour(80, 50, 10)),
             ("Green",  wx.Colour(10, 60, 30)),
             ("Blue",   wx.Colour(10, 40, 80)),
             ("Purple", wx.Colour(50, 20, 80)),
             ("Clear",  None),
-        ]
-        for label, color in colors:
+        ]:
             item = menu.Append(wx.ID_ANY, label)
             self.Bind(wx.EVT_MENU, lambda e, c=color: self._set_color(c), item)
         self.PopupMenu(menu)
@@ -87,68 +132,57 @@ class GaugeCard(wx.Panel):
 
     def _set_color(self, color):
         self._mark_color = color
-        bg = color if color else CLR_SURFACE
-        self.SetBackgroundColour(bg)
+        self.SetBackgroundColour(color if color else CLR_SURFACE)
         self.Refresh()
 
+
+# ── Main panel ────────────────────────────────────────────────────────────────
 
 class MainPanel(wx.Panel):
     def __init__(self, parent):
         super().__init__(parent)
         self.SetBackgroundColour(CLR_BG)
 
-        self._logger   = None
-        self._thread   = None
-        self._cards    = {}   # name → GaugeCard
+        self._logger       = None
+        self._thread       = None
+        self._cards        = {}        # name → GaugeCard
+        self._iface_list   = []        # parallel list to dropdown: (label, type, path)
 
         self._build_ui()
+        self._do_scan()                # populate on startup
 
     def _build_ui(self):
         root = wx.BoxSizer(wx.VERTICAL)
 
-        # ── Top controls bar ─────────────────────────────────────────────────
+        # ── Controls bar (two rows) ───────────────────────────────────────────
         ctrl_panel = wx.Panel(self)
         ctrl_panel.SetBackgroundColour(CLR_SURFACE)
-        ctrl = wx.BoxSizer(wx.HORIZONTAL)
+        ctrl = wx.BoxSizer(wx.VERTICAL)
 
-        # Interface
-        ctrl.Add(wx.StaticText(ctrl_panel, label="Interface:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 10)
-        self._iface_choice = wx.Choice(ctrl_panel, choices=["J2534", "SocketCAN", "USBISOTP"])
-        self._iface_choice.SetSelection(0)
-        ctrl.Add(self._iface_choice, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 6)
-        self._iface_choice.Bind(wx.EVT_CHOICE, self._on_iface_change)
+        # Row 1: device picker
+        row1 = wx.BoxSizer(wx.HORIZONTAL)
+        row1.Add(wx.StaticText(ctrl_panel, label="Device:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 10)
 
-        # DLL path (J2534 only)
-        self._dll_label = wx.StaticText(ctrl_panel, label="DLL:")
-        self._dll_text  = wx.TextCtrl(ctrl_panel, value=DEFAULT_J2534_DLL, size=(280, -1))
-        self._dll_btn   = wx.Button(ctrl_panel, label="…", size=(26, -1))
-        self._dll_btn.Bind(wx.EVT_BUTTON, self._browse_dll)
-        ctrl.Add(self._dll_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 10)
-        ctrl.Add(self._dll_text,  0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 4)
-        ctrl.Add(self._dll_btn,   0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 2)
+        self._device_choice = wx.Choice(ctrl_panel, size=(380, -1))
+        row1.Add(self._device_choice, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 6)
+
+        self._scan_btn = wx.Button(ctrl_panel, label="Scan", size=(52, -1))
+        self._scan_btn.Bind(wx.EVT_BUTTON, self._on_scan)
+        row1.Add(self._scan_btn, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 6)
 
         # Mode
-        ctrl.Add(wx.StaticText(ctrl_panel, label="Mode:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 14)
+        row1.Add(wx.StaticText(ctrl_panel, label="Mode:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 16)
         self._mode_choice = wx.Choice(ctrl_panel, choices=["22", "3E", "HSL"])
         self._mode_choice.SetSelection(0)
-        ctrl.Add(self._mode_choice, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 6)
-
-        # Log path
-        ctrl.Add(wx.StaticText(ctrl_panel, label="Log path:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 14)
-        self._path_text = wx.TextCtrl(ctrl_panel, value=DEFAULT_LOG_PATH, size=(200, -1))
-        self._path_btn  = wx.Button(ctrl_panel, label="…", size=(26, -1))
-        self._path_btn.Bind(wx.EVT_BUTTON, self._browse_path)
-        ctrl.Add(self._path_text, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 4)
-        ctrl.Add(self._path_btn,  0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 2)
+        row1.Add(self._mode_choice, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 6)
 
         # TCP stream toggle
         self._stream_chk = wx.CheckBox(ctrl_panel, label="Stream :65432")
         self._stream_chk.SetValue(True)
-        ctrl.Add(self._stream_chk, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 14)
+        row1.Add(self._stream_chk, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 16)
 
-        ctrl.AddStretchSpacer()
+        row1.AddStretchSpacer()
 
-        # Connect / Stop
         self._connect_btn = wx.Button(ctrl_panel, label="Connect", size=(80, -1))
         self._stop_btn    = wx.Button(ctrl_panel, label="Stop",    size=(80, -1))
         self._stop_btn.Enable(False)
@@ -156,21 +190,32 @@ class MainPanel(wx.Panel):
         self._connect_btn.SetForegroundColour(wx.WHITE)
         self._connect_btn.Bind(wx.EVT_BUTTON, self._on_connect)
         self._stop_btn.Bind(wx.EVT_BUTTON, self._on_stop)
-        ctrl.Add(self._connect_btn, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6)
-        ctrl.Add(self._stop_btn,    0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 10)
+        row1.Add(self._connect_btn, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6)
+        row1.Add(self._stop_btn,    0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 10)
+
+        ctrl.Add(row1, 0, wx.EXPAND | wx.TOP | wx.BOTTOM, 6)
+
+        # Row 2: log path
+        row2 = wx.BoxSizer(wx.HORIZONTAL)
+        row2.Add(wx.StaticText(ctrl_panel, label="Log path:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 10)
+        self._path_text = wx.TextCtrl(ctrl_panel, value=DEFAULT_LOG_PATH, size=(340, -1))
+        self._path_btn  = wx.Button(ctrl_panel, label="…", size=(26, -1))
+        self._path_btn.Bind(wx.EVT_BUTTON, self._browse_path)
+        row2.Add(self._path_text, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 6)
+        row2.Add(self._path_btn,  0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 2)
+        ctrl.Add(row2, 0, wx.EXPAND | wx.BOTTOM, 6)
 
         ctrl_panel.SetSizer(ctrl)
-        ctrl_panel.SetMinSize((-1, 44))
         for child in ctrl_panel.GetChildren():
             child.SetBackgroundColour(CLR_SURFACE)
             child.SetForegroundColour(CLR_TEXT)
-
         root.Add(ctrl_panel, 0, wx.EXPAND)
 
         # ── Status bar ────────────────────────────────────────────────────────
         status_panel = wx.Panel(self)
         status_panel.SetBackgroundColour(CLR_BG)
-        status_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        ss = wx.BoxSizer(wx.HORIZONTAL)
+
         self._status_dot   = wx.StaticText(status_panel, label="●")
         self._status_text  = wx.StaticText(status_panel, label="Disconnected")
         self._logging_text = wx.StaticText(status_panel, label="")
@@ -178,15 +223,16 @@ class MainPanel(wx.Panel):
         self._status_text.SetForegroundColour(CLR_MUTED)
         self._logging_text.SetForegroundColour(CLR_RED)
         self._logging_text.SetFont(wx.Font(9, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
-        status_sizer.Add(self._status_dot,   0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT,  10)
-        status_sizer.Add(self._status_text,  0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT,   6)
-        status_sizer.Add(self._logging_text, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT,  16)
-        # Manual log toggle button
+
         self._log_toggle_btn = wx.Button(status_panel, label="Toggle Log", size=(90, -1))
         self._log_toggle_btn.Enable(False)
         self._log_toggle_btn.Bind(wx.EVT_BUTTON, self._on_toggle_log)
-        status_sizer.Add(self._log_toggle_btn, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 20)
-        status_panel.SetSizer(status_sizer)
+
+        ss.Add(self._status_dot,      0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT,  10)
+        ss.Add(self._status_text,     0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT,   6)
+        ss.Add(self._logging_text,    0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT,  16)
+        ss.Add(self._log_toggle_btn,  0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT,  20)
+        status_panel.SetSizer(ss)
         for child in status_panel.GetChildren():
             child.SetBackgroundColour(CLR_BG)
             child.SetForegroundColour(CLR_TEXT)
@@ -202,22 +248,43 @@ class MainPanel(wx.Panel):
 
         self.SetSizer(root)
 
-    # ── Event handlers ────────────────────────────────────────────────────────
+    # ── Scan ──────────────────────────────────────────────────────────────────
 
-    def _on_iface_change(self, _):
-        iface = self._iface_choice.GetStringSelection()
-        show_dll = iface == "J2534"
-        self._dll_label.Show(show_dll)
-        self._dll_text.Show(show_dll)
-        self._dll_btn.Show(show_dll)
+    def _do_scan(self):
+        self._iface_list = scan_interfaces()
+        self._device_choice.Clear()
+        if self._iface_list:
+            for label, _, _ in self._iface_list:
+                self._device_choice.Append(label)
+            self._device_choice.SetSelection(0)
+        else:
+            self._device_choice.Append("No devices found — click Scan")
         self.Layout()
 
-    def _browse_dll(self, _):
-        dlg = wx.FileDialog(self, "Select J2534 DLL", wildcard="DLL files (*.dll)|*.dll",
-                            style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST)
-        if dlg.ShowModal() == wx.ID_OK:
-            self._dll_text.SetValue(dlg.GetPath())
-        dlg.Destroy()
+    def _on_scan(self, _):
+        self._scan_btn.SetLabel("…")
+        self._scan_btn.Enable(False)
+
+        def _scan():
+            interfaces = scan_interfaces()
+            wx.CallAfter(self._apply_scan, interfaces)
+
+        threading.Thread(target=_scan, daemon=True).start()
+
+    def _apply_scan(self, interfaces):
+        self._iface_list = interfaces
+        self._device_choice.Clear()
+        if interfaces:
+            for label, _, _ in interfaces:
+                self._device_choice.Append(label)
+            self._device_choice.SetSelection(0)
+        else:
+            self._device_choice.Append("No devices found")
+        self._scan_btn.SetLabel("Scan")
+        self._scan_btn.Enable(True)
+        self.Layout()
+
+    # ── Event handlers ────────────────────────────────────────────────────────
 
     def _browse_path(self, _):
         dlg = wx.DirDialog(self, "Select log folder", style=wx.DD_DEFAULT_STYLE)
@@ -226,19 +293,20 @@ class MainPanel(wx.Panel):
         dlg.Destroy()
 
     def _on_connect(self, _):
-        iface    = self._iface_choice.GetStringSelection()
+        idx = self._device_choice.GetSelection()
+        if idx < 0 or idx >= len(self._iface_list):
+            wx.MessageBox("Please select a device first.", "No device selected", wx.OK | wx.ICON_WARNING)
+            return
+
+        _, iface_type, iface_path = self._iface_list[idx]
         mode     = self._mode_choice.GetStringSelection()
         log_path = self._path_text.GetValue()
         stream   = self._stream_chk.GetValue()
 
-        iface_path = None
-        if iface == "J2534":
-            iface_path = self._dll_text.GetValue()
-
         os.makedirs(log_path, exist_ok=True)
 
         self._logger = LoggerCore(
-            interface=iface,
+            interface=iface_type,
             interface_path=iface_path,
             mode=mode,
             log_path=log_path + os.sep,
@@ -277,7 +345,7 @@ class MainPanel(wx.Panel):
         self._stop_btn.Enable(False)
         self._log_toggle_btn.Enable(False)
 
-    # ── Logger callback (called from background thread) ───────────────────────
+    # ── Logger callback ───────────────────────────────────────────────────────
 
     def _on_logger_callback(self, status="", data=None):
         wx.CallAfter(self._update_ui, status, data)
@@ -287,10 +355,9 @@ class MainPanel(wx.Panel):
         if data:
             is_logging = data.get("isLogging", {}).get("Value") == "True"
 
-        # Status dot color
         if "Error" in status or "Timeout" in status:
             self._set_status(status, CLR_RED)
-        elif "running" in status.lower() or "polling" in status.lower() or "connected" in status.lower():
+        elif any(w in status.lower() for w in ("running", "polling", "connected")):
             self._set_status(status, CLR_GREEN)
         else:
             self._set_status(status, CLR_MUTED)
@@ -300,7 +367,6 @@ class MainPanel(wx.Panel):
         if not data:
             return
 
-        # Build/update gauge cards
         rebuilt = False
         for key, entry in data.items():
             if key in ("Time", "isLogging"):
@@ -308,8 +374,7 @@ class MainPanel(wx.Panel):
             name = entry.get("Name", str(key))
             val  = entry.get("Value", "—")
             if name not in self._cards:
-                unit = ""
-                card = GaugeCard(self._grid_panel, name, unit)
+                card = GaugeCard(self._grid_panel, name, "")
                 self._cards[name] = card
                 self._grid_sizer.Add(card, 0, wx.ALL, 5)
                 rebuilt = True
@@ -326,9 +391,11 @@ class MainPanel(wx.Panel):
         self.Layout()
 
 
+# ── Frame ─────────────────────────────────────────────────────────────────────
+
 class LoggerFrame(wx.Frame):
     def __init__(self):
-        super().__init__(None, title="VW ECU Logger", size=(1024, 640))
+        super().__init__(None, title="VW ECU Logger", size=(1100, 660))
         self.SetBackgroundColour(CLR_BG)
         panel = MainPanel(self)
         sizer = wx.BoxSizer(wx.VERTICAL)
