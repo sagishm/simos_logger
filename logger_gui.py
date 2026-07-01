@@ -263,8 +263,10 @@ class GaugeCanvas(wx.Panel):
             self._pen_none   = wx.TRANSPARENT_PEN
 
         dc = wx.PaintDC(self)
+        _t1 = _t.perf_counter()
         dc.SetBackground(self._brush_bg)
         dc.Clear()
+        _t2 = _t.perf_counter()
         dc.SetPen(self._pen_none)
 
         for i, name in enumerate(self._order):
@@ -297,7 +299,8 @@ class GaugeCanvas(wx.Panel):
             tw, _ = dc.GetTextExtent(val)
             dc.DrawText(val, r.x + (CARD_W - tw) // 2, r.y + 28)
 
-        print(f"paint {len(self._order)} cards: {(_t.perf_counter()-_t0)*1000:.1f}ms", flush=True)
+        _t3 = _t.perf_counter()
+        print(f"paint {len(self._order)} cards: total={(_t3-_t0)*1000:.1f}ms  dc_create={(_t1-_t0)*1000:.1f}ms  clear={(_t2-_t1)*1000:.1f}ms  draw={(_t3-_t2)*1000:.1f}ms", flush=True)
 
     def _on_size(self, _):
         self._recalc_virtual_size()
