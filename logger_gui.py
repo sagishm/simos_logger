@@ -26,23 +26,39 @@ CLR_ACCENT  = wx.Colour(79,  156, 249)
 # ── Interface scanner (ported from VW_Flash_GUI.py) ───────────────────────────
 
 def _scan_j2534_registry():
-    """Read installed J2534 devices from Windows registry. Returns list of (name, dll_path)."""
+    """Read installed J2534 devices from Windows registry.
+    Checks both the native hive and Wow6432Node (32-bit entries) so
+    64-bit Python finds the same devices as 32-bit VW Flash."""
     devices = []
     if sys.platform != "win32":
         return devices
     try:
         import winreg
-        base = winreg.OpenKeyEx(winreg.HKEY_LOCAL_MACHINE, r"Software\PassThruSupport.04.04\\")
+    except ImportError:
+        return devices
+
+    hive_paths = [
+        r"Software\PassThruSupport.04.04",
+        r"Software\Wow6432Node\PassThruSupport.04.04",
+    ]
+    seen_dlls = set()
+
+    for path in hive_paths:
+        try:
+            base = winreg.OpenKeyEx(winreg.HKEY_LOCAL_MACHINE, path)
+        except OSError:
+            continue
         for i in range(winreg.QueryInfoKey(base)[0]):
             try:
                 key  = winreg.OpenKeyEx(base, winreg.EnumKey(base, i))
                 name = winreg.QueryValueEx(key, "Name")[0]
                 dll  = winreg.QueryValueEx(key, "FunctionLibrary")[0]
-                devices.append((name, dll))
+                if dll not in seen_dlls:
+                    seen_dlls.add(dll)
+                    devices.append((name, dll))
             except OSError:
                 pass
-    except OSError:
-        pass
+
     return devices
 
 
