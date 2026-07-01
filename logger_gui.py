@@ -98,20 +98,19 @@ class ParamSelectorDialog(wx.Dialog):
         super().__init__(parent, title="Select Parameters", size=(340, 500),
                          style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
         self.SetBackgroundColour(CLR_BG)
+        self._all_params = all_params
 
-        panel = wx.Panel(self)
-        panel.SetBackgroundColour(CLR_BG)
         vbox = wx.BoxSizer(wx.VERTICAL)
 
         # search box
-        self._search = wx.TextCtrl(panel, style=wx.TE_PROCESS_ENTER)
+        self._search = wx.TextCtrl(self, style=wx.TE_PROCESS_ENTER)
         self._search.SetBackgroundColour(CLR_SURFACE)
         self._search.SetForegroundColour(CLR_TEXT)
         self._search.SetHint("Search…")
         vbox.Add(self._search, 0, wx.EXPAND | wx.ALL, 8)
 
         # checklist
-        self._clb = wx.CheckListBox(panel, choices=all_params)
+        self._clb = wx.CheckListBox(self, choices=all_params)
         self._clb.SetBackgroundColour(CLR_SURFACE)
         self._clb.SetForegroundColour(CLR_TEXT)
         for i, name in enumerate(all_params):
@@ -121,28 +120,19 @@ class ParamSelectorDialog(wx.Dialog):
 
         # select all / none
         btn_row = wx.BoxSizer(wx.HORIZONTAL)
-        all_btn  = wx.Button(panel, label="All",  size=(60, -1))
-        none_btn = wx.Button(panel, label="None", size=(60, -1))
+        all_btn  = wx.Button(self, label="All",  size=(60, -1))
+        none_btn = wx.Button(self, label="None", size=(60, -1))
         all_btn.Bind(wx.EVT_BUTTON,  lambda _: self._check_all(True))
         none_btn.Bind(wx.EVT_BUTTON, lambda _: self._check_all(False))
         btn_row.Add(all_btn,  0, wx.RIGHT, 4)
         btn_row.Add(none_btn, 0)
         vbox.Add(btn_row, 0, wx.LEFT | wx.BOTTOM, 8)
 
-        # OK / Cancel
-        btns = self.CreateButtonSizer(wx.OK | wx.CANCEL)
-        vbox.Add(btns, 0, wx.EXPAND | wx.ALL, 8)
+        # OK / Cancel — parented to dialog, added to dialog sizer
+        vbox.Add(self.CreateButtonSizer(wx.OK | wx.CANCEL), 0, wx.EXPAND | wx.ALL, 8)
 
-        panel.SetSizer(vbox)
-        outer = wx.BoxSizer(wx.VERTICAL)
-        outer.Add(panel, 1, wx.EXPAND)
-        self.SetSizer(outer)
-
-        self._all_params = all_params
+        self.SetSizer(vbox)
         self._search.Bind(wx.EVT_TEXT, self._on_search)
-
-        for w in (self, panel, self._clb):
-            w.SetBackgroundColour(CLR_SURFACE if w is self._clb else CLR_BG)
 
     def _check_all(self, state):
         for i in range(self._clb.GetCount()):
@@ -379,7 +369,7 @@ class GaugeGrid(wx.ScrolledWindow):
     # ── Internal ─────────────────────────────────────────────────────────────
 
     def _rebuild_sizer(self):
-        self._sizer.Clear(detach=True)
+        self._sizer.Clear(delete_windows=False)
         for name in self._order:
             if name in self._cards:
                 self._sizer.Add(self._cards[name], 0, wx.ALL, 5)
