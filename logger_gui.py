@@ -346,9 +346,10 @@ class ParamSelectorDialog(wx.Dialog):
 
 # ── GaugeView — WebView-based gauge renderer ──────────────────────────────────
 
-class GaugeView(wx.html2.WebView):
+class GaugeView:
     def __init__(self, parent, on_order_changed, on_color_changed):
-        super().__init__(parent)
+        self._wv = wx.html2.WebView.New(parent)
+        self.widget = self._wv  # expose for sizer
         self._on_order_changed = on_order_changed
         self._on_color_changed = on_color_changed
         self._ready    = False
@@ -356,17 +357,15 @@ class GaugeView(wx.html2.WebView):
         self._colors   = {}
         self._values   = {}
         self._is_logging = False
-        self._pending_params = None  # set_params called before ready
+        self._pending_params = None
 
-        self.SetPage(GAUGE_HTML, "")
-        self.Bind(wx.html2.EVT_WEBVIEW_LOADED, self._on_loaded)
+        self._wv.SetPage(GAUGE_HTML, "")
+        self._wv.Bind(wx.html2.EVT_WEBVIEW_LOADED, self._on_loaded)
 
     def _on_loaded(self, _):
         self._ready = True
-        # wire JS callbacks → Python
-        self.Bind(wx.html2.EVT_WEBVIEW_SCRIPT_MESSAGE_RECEIVED, self._on_js_message)
-        # inject bridge: JS calls window.pybridge('orderChanged', ...) etc.
-        self.RunScript("""
+        self._wv.Bind(wx.html2.EVT_WEBVIEW_SCRIPT_MESSAGE_RECEIVED, self._on_js_message)
+        self._wv.RunScript("""
             window.onOrderChanged = function(order) {
                 window.wx_order_changed = JSON.stringify(order);
             };
@@ -387,7 +386,7 @@ class GaugeView(wx.html2.WebView):
             return
         order_js  = json.dumps(order)
         colors_js = json.dumps(colors)
-        self.RunScript(f"setParams({order_js}, {colors_js});")
+        self._wv.RunScript(f"setParams({order_js}, {colors_js});")
 
     def update(self, by_name, is_logging):
         if not self._ready:
@@ -397,14 +396,13 @@ class GaugeView(wx.html2.WebView):
         filtered = {n: by_name[n] for n in self._order if n in by_name}
         by_name_js  = json.dumps(filtered)
         is_log_js   = "true" if is_logging else "false"
-        self.RunScript(f"update({by_name_js}, {is_log_js});")
-        # poll JS for order/color changes (simple polling — no full message bridge needed)
+        self._wv.RunScript(f"update({by_name_js}, {is_log_js});")
         self._poll_js_changes()
 
     def _poll_js_changes(self):
-        ok, val = self.RunScript("window.wx_order_changed || ''")
-        if ok and val and val != "''":
-            self.RunScript("window.wx_order_changed = null;")
+        ok, val = self._wv.RunScript("window.wx_order_changed || ''")
+        if ok and val and val not in ("''", ""):
+            self._wv.RunScript("window.wx_order_changed = null;")
             try:
                 order = json.loads(val)
                 self._order = order
@@ -412,9 +410,9 @@ class GaugeView(wx.html2.WebView):
             except Exception:
                 pass
 
-        ok, val = self.RunScript("window.wx_color_changed || ''")
-        if ok and val and val != "''":
-            self.RunScript("window.wx_color_changed = null;")
+        ok, val = self._wv.RunScript("window.wx_color_changed || ''")
+        if ok and val and val not in ("''", ""):
+            self._wv.RunScript("window.wx_color_changed = null;")
             try:
                 data = json.loads(val)
                 self._colors[data["name"]] = data["color"]
@@ -530,7 +528,7 @@ class MainPanel(wx.Panel):
 
         # ── Gauge WebView ─────────────────────────────────────────────────────
         self._gauge = GaugeView(self, self._on_order_changed, self._on_color_changed)
-        root.Add(self._gauge, 1, wx.EXPAND | wx.ALL, 10)
+        root.Add(self._gauge.widget, 1, wx.EXPAND | wx.ALL, 10)
 
         self.SetSizer(root)
 
