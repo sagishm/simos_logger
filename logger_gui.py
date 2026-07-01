@@ -728,7 +728,10 @@ class MainPanel(wx.Panel):
             self._params_applied = True
 
         is_logging = by_name.get("isLogging", "False") == "True"
-        self._set_status("Connected — polling", CLR_GREEN)
+        if self._params_applied:
+            self._set_status("Connected — polling", CLR_GREEN)
+        else:
+            self._set_status("Connecting…", CLR_MUTED)
         log_label = "● LOGGING" if is_logging else ""
         if log_label != self._logging_text.GetLabel():
             self._logging_text.SetLabel(log_label)
