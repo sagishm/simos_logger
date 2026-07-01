@@ -365,6 +365,7 @@ class GaugeView:
         self._on_order_changed = on_order_changed
         self._on_color_changed = on_color_changed
         self._ready    = False
+        self._busy     = False
         self._order    = []
         self._colors   = {}
         self._units    = {}
@@ -375,6 +376,9 @@ class GaugeView:
         self._wv.Bind(wx.html2.EVT_WEBVIEW_LOADED, self._on_loaded)
 
     def _run(self, script):
+        if self._busy:
+            return False, ""
+        self._busy = True
         try:
             ok, result = self._wv.RunScript(script)
             if not ok:
@@ -383,6 +387,8 @@ class GaugeView:
         except Exception as e:
             print(f"RunScript exception: {e}", flush=True)
             return False, ""
+        finally:
+            self._busy = False
 
     def _on_loaded(self, _):
         if self._ready:
