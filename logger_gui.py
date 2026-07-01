@@ -159,7 +159,6 @@ class ParamSelectorDialog(wx.Dialog):
 # ── Gauge card ────────────────────────────────────────────────────────────────
 
 class GaugeCard(wx.Panel):
-    # color presets: (menu label, background colour tuple)
     COLOR_PRESETS = [
         ("Red",    (80, 20, 20)),
         ("Orange", (80, 50, 10)),
@@ -169,78 +168,75 @@ class GaugeCard(wx.Panel):
         ("Clear",  None),
     ]
 
+    _FONT_NAME  = wx.Font(7,  wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL)
+    _FONT_VALUE = wx.Font(18, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD)
+
     def __init__(self, parent, name, unit=""):
-        super().__init__(parent, style=wx.BORDER_NONE)
+        super().__init__(parent, size=(140, 86), style=wx.BORDER_NONE)
         self.name        = name
+        self._unit       = unit
+        self._value      = "—"
         self._mark_color = None
-        self._dragging   = False
+        self._bg         = CLR_SURFACE
+        self._drop_target = False
+        self.SetMinSize((140, 86))
+        self.SetBackgroundStyle(wx.BG_STYLE_PAINT)
 
-        self.SetBackgroundColour(CLR_SURFACE)
-        sizer = wx.BoxSizer(wx.VERTICAL)
+        self.Bind(wx.EVT_PAINT,      self._on_paint)
+        self.Bind(wx.EVT_RIGHT_DOWN, self._on_right_click)
 
-        # drag handle bar at top
-        self._drag_bar = wx.Panel(self, size=(-1, 6))
-        self._drag_bar.SetBackgroundColour(CLR_BORDER)
-        self._drag_bar.SetCursor(wx.Cursor(wx.CURSOR_SIZING))
-        sizer.Add(self._drag_bar, 0, wx.EXPAND)
+    # ── Drawing ───────────────────────────────────────────────────────────────
 
-        self._name_lbl  = wx.StaticText(self, label=name.upper())
-        self._value_lbl = wx.StaticText(self, label="—")
-        self._unit_lbl  = wx.StaticText(self, label=unit)
+    def _on_paint(self, _):
+        dc = wx.AutoBufferedPaintDC(self)   # double-buffered, no flicker
+        w, h = self.GetSize()
 
-        self._name_lbl.SetForegroundColour(CLR_MUTED)
-        self._name_lbl.SetFont(wx.Font(7, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
-        self._value_lbl.SetForegroundColour(CLR_TEXT)
-        self._value_lbl.SetFont(wx.Font(18, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
-        self._unit_lbl.SetForegroundColour(CLR_MUTED)
-        self._unit_lbl.SetFont(wx.Font(7, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+        # background
+        dc.SetBackground(wx.Brush(self._bg))
+        dc.Clear()
 
-        sizer.Add(self._name_lbl,  0, wx.ALIGN_CENTER | wx.TOP, 4)
-        sizer.Add(self._value_lbl, 0, wx.ALIGN_CENTER | wx.TOP | wx.BOTTOM, 4)
-        sizer.Add(self._unit_lbl,  0, wx.ALIGN_CENTER | wx.BOTTOM, 6)
-        self.SetSizer(sizer)
-        self.SetMinSize((140, 80))
+        # drag handle strip at top — highlight blue when drop target
+        dc.SetPen(wx.TRANSPARENT_PEN)
+        dc.SetBrush(wx.Brush(CLR_ACCENT if self._drop_target else CLR_BORDER))
+        dc.DrawRectangle(0, 0, w, 5)
 
-        # right-click color menu on all sub-widgets
-        for w in (self, self._name_lbl, self._value_lbl, self._unit_lbl):
-            w.Bind(wx.EVT_RIGHT_DOWN, self._on_right_click)
+        # name
+        dc.SetFont(self._FONT_NAME)
+        dc.SetTextForeground(CLR_MUTED)
+        name_text = self.name.upper()
+        tw, _ = dc.GetTextExtent(name_text)
+        dc.DrawText(name_text, (w - tw) // 2, 10)
 
-        # drag-and-drop via drag bar
-        self._drag_bar.Bind(wx.EVT_LEFT_DOWN,  self._on_drag_start)
-        self._drag_bar.Bind(wx.EVT_LEFT_UP,    self._on_drag_end)
-        self._drag_bar.Bind(wx.EVT_MOTION,     self._on_drag_motion)
+        # value
+        dc.SetFont(self._FONT_VALUE)
+        dc.SetTextForeground(CLR_TEXT)
+        tw, th = dc.GetTextExtent(self._value)
+        dc.DrawText(self._value, (w - tw) // 2, 10 + 14 + 4)
+
+        # unit
+        if self._unit:
+            dc.SetFont(self._FONT_NAME)
+            dc.SetTextForeground(CLR_MUTED)
+            tw, _ = dc.GetTextExtent(self._unit)
+            dc.DrawText(self._unit, (w - tw) // 2, h - 14)
 
     # ── Live update ───────────────────────────────────────────────────────────
 
     def update(self, value, logging_active):
-        new_label = str(value)
-        if self._value_lbl.GetLabel() != new_label:
-            self._value_lbl.SetLabel(new_label)
-            self._value_lbl.Refresh()
+        new_value = str(value)
+        new_bg    = wx.Colour(40, 20, 20) if logging_active else (
+                    wx.Colour(*self._mark_color) if self._mark_color else CLR_SURFACE)
 
-        if logging_active:
-            new_bg = wx.Colour(40, 20, 20)
-        elif self._mark_color:
-            new_bg = wx.Colour(*self._mark_color)
-        else:
-            new_bg = CLR_SURFACE
+        if self._value != new_value or self._bg != new_bg:
+            self._value = new_value
+            self._bg    = new_bg
+            self.Refresh()   # triggers _on_paint — single WM_PAINT per card
 
-        if self.GetBackgroundColour() != new_bg:
-            self.SetBackgroundColour(new_bg)
-            for child in self.GetChildren():
-                if child is not self._drag_bar:
-                    child.SetBackgroundColour(new_bg)
-            self.Refresh()
-
-    # ── Color marking ────────────────────────────────────────────────────────
+    # ── Color marking ─────────────────────────────────────────────────────────
 
     def set_mark_color(self, color_tuple):
         self._mark_color = color_tuple
-        bg = wx.Colour(*color_tuple) if color_tuple else CLR_SURFACE
-        self.SetBackgroundColour(bg)
-        for child in self.GetChildren():
-            if child is not self._drag_bar:
-                child.SetBackgroundColour(bg)
+        self._bg = wx.Colour(*color_tuple) if color_tuple else CLR_SURFACE
         self.Refresh()
 
     def _on_right_click(self, _):
@@ -253,31 +249,35 @@ class GaugeCard(wx.Panel):
 
     def _pick_color(self, color_tuple):
         self.set_mark_color(color_tuple)
-        # notify parent to save prefs
         evt = wx.CommandEvent(wx.EVT_MENU.typeId)
         evt.SetString("color:" + self.name)
         wx.PostEvent(self.GetParent(), evt)
 
-    # ── Drag-and-drop ────────────────────────────────────────────────────────
+    # ── Drag handle ───────────────────────────────────────────────────────────
 
-    def _on_drag_start(self, event):
+    def _start_drag(self, event):
         self._dragging   = True
         self._drag_start = self.GetParent().ScreenToClient(self.ClientToScreen(event.GetPosition()))
-        self._drag_bar.CaptureMouse()
+        self.CaptureMouse()
 
-    def _on_drag_end(self, event):
-        if not self._dragging:
+    def _end_drag(self, event):
+        if not getattr(self, "_dragging", False):
             return
         self._dragging = False
-        if self._drag_bar.HasCapture():
-            self._drag_bar.ReleaseMouse()
+        if self.HasCapture():
+            self.ReleaseMouse()
         pos = self.GetParent().ScreenToClient(self.ClientToScreen(event.GetPosition()))
         wx.PostEvent(self.GetParent(), _DropEvent(self.name, pos))
 
-    def _on_drag_motion(self, event):
-        if self._dragging and event.Dragging() and event.LeftIsDown():
+    def _motion_drag(self, event):
+        if getattr(self, "_dragging", False) and event.Dragging() and event.LeftIsDown():
             pos = self.GetParent().ScreenToClient(self.ClientToScreen(event.GetPosition()))
             wx.PostEvent(self.GetParent(), _DragEvent(self.name, pos))
+
+    def _bind_drag(self):
+        self.Bind(wx.EVT_LEFT_DOWN, self._start_drag)
+        self.Bind(wx.EVT_LEFT_UP,   self._end_drag)
+        self.Bind(wx.EVT_MOTION,    self._motion_drag)
 
 
 # ── Custom drag/drop events ───────────────────────────────────────────────────
@@ -351,6 +351,7 @@ class GaugeGrid(wx.ScrolledWindow):
             self.Freeze()
             for name in missing:
                 card = GaugeCard(self, name)
+                card._bind_drag()
                 self._cards[name] = card
                 color = prefs.get("colors", {}).get(name)
                 if color:
@@ -419,14 +420,14 @@ class GaugeGrid(wx.ScrolledWindow):
         self._clear_highlights()
         name = self._order[idx] if idx < len(self._order) else None
         if name and name in self._cards:
-            card = self._cards[name]
-            card._drag_bar.SetBackgroundColour(CLR_ACCENT)
-            card._drag_bar.Refresh()
+            self._cards[name]._drop_target = True
+            self._cards[name].Refresh()
 
     def _clear_highlights(self):
         for card in self._cards.values():
-            card._drag_bar.SetBackgroundColour(CLR_BORDER)
-            card._drag_bar.Refresh()
+            if getattr(card, "_drop_target", False):
+                card._drop_target = False
+                card.Refresh()
 
     def _on_color_changed(self, event):
         s = event.GetString()
