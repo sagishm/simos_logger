@@ -363,8 +363,9 @@ class GaugeView:
         self._wv.Bind(wx.html2.EVT_WEBVIEW_LOADED, self._on_loaded)
 
     def _on_loaded(self, _):
+        if self._ready:
+            return
         self._ready = True
-        self._wv.Bind(wx.html2.EVT_WEBVIEW_SCRIPT_MESSAGE_RECEIVED, self._on_js_message)
         self._wv.RunScript("""
             window.onOrderChanged = function(order) {
                 window.wx_order_changed = JSON.stringify(order);
@@ -384,6 +385,7 @@ class GaugeView:
         if not self._ready:
             self._pending_params = (order, colors)
             return
+        self._pending_params = None
         order_js  = json.dumps(order)
         colors_js = json.dumps(colors)
         self._wv.RunScript(f"setParams({order_js}, {colors_js});")
@@ -681,7 +683,7 @@ class MainPanel(wx.Panel):
 
         if new_found and not self._selected and not self._initial_apply_pending:
             self._initial_apply_pending = True
-            wx.CallLater(500, self._initial_apply)
+            wx.CallLater(1500, self._initial_apply)
 
         is_logging = by_name.get("isLogging", "False") == "True"
         self._set_status("Connected — polling", CLR_GREEN)
