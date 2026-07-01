@@ -256,10 +256,6 @@ class GaugeCanvas(wx.Panel):
             self._font_name  = wx.Font(7,  wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL)
             self._font_value = wx.Font(16, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD)
             self._brush_bg   = wx.Brush(CLR_BG)
-            self._brush_surf = wx.Brush(CLR_SURFACE)
-            self._brush_log  = wx.Brush(CLR_LOG_BG)
-            self._brush_bdr  = wx.Brush(CLR_BORDER)
-            self._brush_acc  = wx.Brush(CLR_ACCENT)
             self._pen_none   = wx.TRANSPARENT_PEN
 
         cw, ch = self.GetClientSize()
@@ -267,48 +263,50 @@ class GaugeCanvas(wx.Panel):
             wx.PaintDC(self)
             return
 
-        # draw to off-screen bitmap, blit once
-        bmp = wx.Bitmap(cw, ch)
-        dc  = wx.MemoryDC(bmp)
-        dc.SetBackground(self._brush_bg)
-        dc.Clear()
-        dc.SetPen(self._pen_none)
+        pdc = wx.PaintDC(self)
+        gc  = wx.GraphicsContext.Create(pdc)
+        if gc is None:
+            return
+
+        # background
+        gc.SetBrush(gc.CreateBrush(self._brush_bg))
+        gc.DrawRectangle(0, 0, cw, ch)
+
+        fn  = gc.CreateFont(self._font_name,  CLR_MUTED)
+        fv  = gc.CreateFont(self._font_value, CLR_TEXT)
 
         for i, name in enumerate(self._order):
             r = self._card_rect(i)
 
+            # card background
             if self._is_logging:
-                dc.SetBrush(self._brush_log)
+                bg = CLR_LOG_BG
             elif self._colors.get(name):
-                clr = self._colors[name]
-                key = clr.GetRGB()
-                if key not in self._brush_cache:
-                    self._brush_cache[key] = wx.Brush(clr)
-                dc.SetBrush(self._brush_cache[key])
+                bg = self._colors[name]
             else:
-                dc.SetBrush(self._brush_surf)
-            dc.DrawRectangle(r.x, r.y, CARD_W, CARD_H)
+                bg = CLR_SURFACE
+            gc.SetBrush(gc.CreateBrush(wx.Brush(bg)))
+            gc.SetPen(wx.TRANSPARENT_PEN)
+            gc.DrawRectangle(r.x, r.y, CARD_W, CARD_H)
 
-            dc.SetBrush(self._brush_acc if i == self._drop_idx else self._brush_bdr)
-            dc.DrawRectangle(r.x, r.y, CARD_W, 5)
+            # handle strip
+            strip_clr = CLR_ACCENT if i == self._drop_idx else CLR_BORDER
+            gc.SetBrush(gc.CreateBrush(wx.Brush(strip_clr)))
+            gc.DrawRectangle(r.x, r.y, CARD_W, 5)
 
-            dc.SetFont(self._font_name)
-            dc.SetTextForeground(CLR_MUTED)
+            # name label
+            gc.SetFont(fn)
             label = self._upper.get(name, name)
-            tw, _ = dc.GetTextExtent(label)
-            dc.DrawText(label, r.x + (CARD_W - tw) // 2, r.y + 10)
+            tw, th = gc.GetTextExtent(label)
+            gc.DrawText(label, r.x + (CARD_W - tw) / 2, r.y + 10)
 
-            dc.SetFont(self._font_value)
-            dc.SetTextForeground(CLR_TEXT)
+            # value
+            gc.SetFont(fv)
             val = self._values.get(name, "—")
-            tw, _ = dc.GetTextExtent(val)
-            dc.DrawText(val, r.x + (CARD_W - tw) // 2, r.y + 28)
+            tw, th = gc.GetTextExtent(val)
+            gc.DrawText(val, r.x + (CARD_W - tw) / 2, r.y + 28)
 
-        _t1 = _t.perf_counter()
-        dc.SelectObject(wx.NullBitmap)
-        pdc = wx.PaintDC(self)
-        pdc.DrawBitmap(bmp, 0, 0)
-        print(f"paint {len(self._order)}: draw={(_t1-_t0)*1000:.0f}ms  blit={(_t.perf_counter()-_t1)*1000:.0f}ms", flush=True)
+        print(f"paint {len(self._order)}: {(_t.perf_counter()-_t0)*1000:.0f}ms", flush=True)
 
     def _on_size(self, _):
         self._recalc_virtual_size()
