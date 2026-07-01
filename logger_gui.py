@@ -251,6 +251,7 @@ class GaugeCanvas(wx.Panel):
     # ── Paint ─────────────────────────────────────────────────────────────────
 
     def _on_paint(self, _):
+        import time as _t; _t0 = _t.perf_counter()
         if self._font_name is None:
             self._font_name  = wx.Font(7,  wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL)
             self._font_value = wx.Font(16, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD)
@@ -295,6 +296,8 @@ class GaugeCanvas(wx.Panel):
             val = self._values.get(name, "—")
             tw, _ = dc.GetTextExtent(val)
             dc.DrawText(val, r.x + (CARD_W - tw) // 2, r.y + 28)
+
+        print(f"paint {len(self._order)} cards: {(_t.perf_counter()-_t0)*1000:.1f}ms", flush=True)
 
     def _on_size(self, _):
         self._recalc_virtual_size()
