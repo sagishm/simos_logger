@@ -360,16 +360,11 @@ class GaugeGrid(wx.ScrolledWindow):
 
         self._rebuild_sizer()
 
-    def update(self, data, is_logging):
+    def update(self, by_name, is_logging):
+        # by_name is a pre-built dict: name → value string
         for name, card in self._cards.items():
-            entry = None
-            # data keys are numeric indices; match by Name field
-            for v in data.values():
-                if isinstance(v, dict) and v.get("Name") == name:
-                    entry = v
-                    break
-            if entry:
-                card.update(entry.get("Value", "—"), is_logging)
+            if name in by_name:
+                card.update(by_name[name], is_logging)
 
     def get_order(self):
         return list(self._order)
@@ -664,6 +659,7 @@ class MainPanel(wx.Panel):
         if dlg.ShowModal() == wx.ID_OK:
             self._selected = dlg.get_selected()
             self._prefs["selected"] = list(self._selected)
+            self._prefs["order"] = [n for n in self._prefs.get("order", []) if n in self._selected]
             self._apply_selection()
             _save_prefs(self._prefs)
         dlg.Destroy()
@@ -692,28 +688,34 @@ class MainPanel(wx.Panel):
 
         data = dict(self._logger.data_stream)
 
-        # discover new params
+        # build a flat name→value map and discover new params in one pass
+        by_name   = {}
         new_found = False
         for v in data.values():
-            if isinstance(v, dict):
-                name = v.get("Name", "")
-                if name and name not in ("Time", "isLogging") and name not in self._all_params:
-                    self._all_params.append(name)
-                    new_found = True
+            if not isinstance(v, dict):
+                continue
+            name = v.get("Name", "")
+            val  = v.get("Value", "—")
+            if not name or name == "Time":
+                continue
+            by_name[name] = val
+            if name != "isLogging" and name not in self._all_params:
+                self._all_params.append(name)
+                new_found = True
 
-        # on first data, auto-select from saved prefs or select all
+        # first time we see params: apply saved selection or show all
         if new_found and not self._selected:
             saved = set(self._prefs.get("selected", []))
-            self._selected = saved & set(self._all_params) if saved else set(self._all_params)
+            self._selected = (saved & set(self._all_params)) if saved else set(self._all_params)
             self._apply_selection()
 
-        is_logging = data.get("isLogging", {}).get("Value") == "True"
+        is_logging = by_name.get("isLogging", "False") == "True"
         self._set_status("Connected — polling", CLR_GREEN)
         self._logging_text.SetLabel("● LOGGING" if is_logging else "")
 
         self._grid.Freeze()
         try:
-            self._grid.update(data, is_logging)
+            self._grid.update(by_name, is_logging)
         finally:
             self._grid.Thaw()
 
