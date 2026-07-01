@@ -560,7 +560,7 @@ class MainPanel(wx.Panel):
 
         # ── Gauge WebView ─────────────────────────────────────────────────────
         self._gauge = GaugeView(self, self._on_order_changed, self._on_color_changed)
-        root.Add(self._gauge.widget, 1, wx.EXPAND | wx.ALL, 10)
+        root.Add(self._gauge.widget, 1, wx.EXPAND)
 
         self.SetSizer(root)
 
