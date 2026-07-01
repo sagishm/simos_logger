@@ -122,14 +122,25 @@ class GaugeCard(wx.Panel):
             w.Bind(wx.EVT_RIGHT_DOWN, self._on_right_click)
 
     def update(self, value, logging_active):
-        self._value_lbl.SetLabel(str(value))
+        changed = False
+        new_label = str(value)
+        if self._value_lbl.GetLabel() != new_label:
+            self._value_lbl.SetLabel(new_label)
+            changed = True
+
         if logging_active:
-            self.SetBackgroundColour(wx.Colour(40, 20, 20))
+            new_bg = wx.Colour(40, 20, 20)
         elif self._mark_color:
-            self.SetBackgroundColour(self._mark_color)
+            new_bg = self._mark_color
         else:
-            self.SetBackgroundColour(CLR_SURFACE)
-        self.Refresh()
+            new_bg = CLR_SURFACE
+
+        if self.GetBackgroundColour() != new_bg:
+            self.SetBackgroundColour(new_bg)
+            changed = True
+
+        if changed:
+            self.Refresh()
 
     def _on_right_click(self, _):
         menu = wx.Menu()
@@ -163,6 +174,7 @@ class MainPanel(wx.Panel):
         self._thread       = None
         self._cards        = {}        # name → GaugeCard
         self._iface_list   = []        # parallel list to dropdown: (label, type, path)
+        self._last_status  = ""        # avoid redundant Layout() calls
 
         self._build_ui()
         self._do_scan()                # populate on startup
@@ -401,6 +413,9 @@ class MainPanel(wx.Panel):
             self._grid_sizer.FitInside(self._grid_panel)
 
     def _set_status(self, text, color):
+        if text == self._last_status:
+            return
+        self._last_status = text
         self._status_dot.SetForegroundColour(color)
         self._status_text.SetLabel(text)
         self._status_text.SetForegroundColour(color)
