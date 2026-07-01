@@ -327,26 +327,35 @@ class GaugeGrid(wx.ScrolledWindow):
     # ── Public API ────────────────────────────────────────────────────────────
 
     def set_params(self, names, prefs):
-        """Rebuild cards for the given list of names."""
-        # keep existing cards if already present
-        to_remove = [n for n in list(self._cards) if n not in names]
-        for name in to_remove:
-            self._cards[name].Destroy()
-            del self._cards[name]
+        """Show only the given param names as cards."""
+        names_set = set(names)
 
-        self._order = [n for n in self._order if n in names]
+        # remove cards no longer selected
+        to_remove = [n for n in list(self._cards) if n not in names_set]
+        if to_remove:
+            self.Freeze()
+            for name in to_remove:
+                self._cards[name].Destroy()
+                del self._cards[name]
+            self.Thaw()
+
+        # update order
+        self._order = [n for n in self._order if n in names_set]
         for name in names:
             if name not in self._order:
                 self._order.append(name)
 
-        # create missing cards
-        for name in self._order:
-            if name not in self._cards:
+        # create only missing cards, batched
+        missing = [n for n in self._order if n not in self._cards]
+        if missing:
+            self.Freeze()
+            for name in missing:
                 card = GaugeCard(self, name)
                 self._cards[name] = card
                 color = prefs.get("colors", {}).get(name)
                 if color:
                     card.set_mark_color(color)
+            self.Thaw()
 
         self._rebuild_sizer()
 
@@ -612,7 +621,7 @@ class MainPanel(wx.Panel):
 
         self._thread = threading.Thread(target=self._run_logger, daemon=True)
         self._thread.start()
-        self._ui_timer.Start(100)
+        self._ui_timer.Start(200)  # 5fps — sufficient for gauges, keeps UI responsive
 
     def _run_logger(self):
         try:
@@ -702,12 +711,7 @@ class MainPanel(wx.Panel):
         is_logging = by_name.get("isLogging", "False") == "True"
         self._set_status("Connected — polling", CLR_GREEN)
         self._logging_text.SetLabel("● LOGGING" if is_logging else "")
-
-        self._grid.Freeze()
-        try:
-            self._grid.update(by_name, is_logging)
-        finally:
-            self._grid.Thaw()
+        self._grid.update(by_name, is_logging)
 
     # ── Prefs save ────────────────────────────────────────────────────────────
 
