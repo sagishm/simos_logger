@@ -635,13 +635,13 @@ class MainPanel(wx.Panel):
         if dlg.ShowModal() == wx.ID_OK:
             self._selected = dlg.get_selected()
             self._prefs["selected"] = list(self._selected)
-            self._prefs["order"] = [n for n in self._prefs.get("order", []) if n in self._selected]
+            self._prefs["order"] = [n for n in (self._prefs.get("order") or []) if n in self._selected]
             self._apply_selection()
             _save_prefs(self._prefs)
         dlg.Destroy()
 
     def _apply_selection(self):
-        saved_order = self._prefs.get("order", [])
+        saved_order = self._prefs.get("order") or []
         ordered = [n for n in saved_order if n in self._selected]
         for n in self._selected:
             if n not in ordered:
@@ -649,7 +649,7 @@ class MainPanel(wx.Panel):
         self._gauge.set_params(ordered, self._prefs.get("colors", {}))
 
     def _initial_apply(self):
-        saved = set(self._prefs.get("selected", []))
+        saved = set(self._prefs.get("selected") or [])
         self._selected = (saved & set(self._all_params)) if saved else set(self._all_params)
         self._apply_selection()
 
