@@ -197,18 +197,17 @@ class GaugeCanvas(wx.ScrolledWindow):
         self._values = {n: self._values.get(n, "—") for n in order}
         self._recalc_virtual_size()
         self.Refresh()
-        self.Update()
 
     def update(self, by_name, is_logging):
         changed = is_logging != self._is_logging
         self._is_logging = is_logging
         for name in self._order:
-            if name in by_name and by_name[name] != self._values.get(name):
-                self._values[name] = by_name[name]
+            new_val = by_name.get(name)
+            if new_val is not None and new_val != self._values.get(name):
+                self._values[name] = new_val
                 changed = True
         if changed:
             self.Refresh()
-            self.Update()
 
     def get_order(self):
         return list(self._order)
@@ -360,7 +359,6 @@ class GaugeCanvas(wx.ScrolledWindow):
     def _pick_color(self, name, color):
         self._colors[name] = color
         self.Refresh()
-        self.Update()
         self._on_prefs_changed(self._order)
 
 
@@ -378,6 +376,7 @@ class MainPanel(wx.Panel):
         self._all_params  = []
         self._selected    = set()
         self._prefs       = _load_prefs()
+        self._initial_apply_pending = False
 
         self._build_ui()
         self._do_scan()
@@ -582,6 +581,11 @@ class MainPanel(wx.Panel):
                 ordered.append(n)
         self._canvas.set_params(ordered, self._prefs.get("colors", {}))
 
+    def _initial_apply(self):
+        saved = set(self._prefs.get("selected", []))
+        self._selected = (saved & set(self._all_params)) if saved else set(self._all_params)
+        self._apply_selection()
+
     # ── Timer UI update ───────────────────────────────────────────────────────
 
     def _on_ui_timer(self, _):
@@ -610,10 +614,9 @@ class MainPanel(wx.Panel):
                 self._all_params.append(name)
                 new_found = True
 
-        if new_found and not self._selected:
-            saved = set(self._prefs.get("selected", []))
-            self._selected = (saved & set(self._all_params)) if saved else set(self._all_params)
-            self._apply_selection()
+        if new_found and not self._selected and not self._initial_apply_pending:
+            self._initial_apply_pending = True
+            wx.CallLater(500, self._initial_apply)
 
         is_logging = by_name.get("isLogging", "False") == "True"
         self._set_status("Connected — polling", CLR_GREEN)
