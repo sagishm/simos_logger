@@ -3,6 +3,7 @@ VW ECU Logger — Standalone wxPython GUI
 """
 
 import wx
+import wx.html2
 import threading
 import os
 import sys
@@ -13,27 +14,216 @@ from logger_core import LoggerCore
 DEFAULT_LOG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
 PREFS_FILE       = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gauge_prefs.json")
 
-# ── Colour constants ──────────────────────────────────────────────────────────
+# ── Colour constants (wx widgets only) ───────────────────────────────────────
 CLR_BG      = wx.Colour(15,  17,  23)
 CLR_SURFACE = wx.Colour(26,  29,  39)
-CLR_BORDER  = wx.Colour(42,  45,  58)
 CLR_TEXT    = wx.Colour(226, 232, 240)
 CLR_MUTED   = wx.Colour(100, 116, 139)
 CLR_GREEN   = wx.Colour(34,  197, 94)
 CLR_RED     = wx.Colour(239, 68,  68)
 CLR_ACCENT  = wx.Colour(79,  156, 249)
-CLR_LOG_BG  = wx.Colour(40,  20,  20)
 
-CARD_W, CARD_H, CARD_PAD = 150, 90, 8
+# ── Gauge HTML (loaded once into WebView) ─────────────────────────────────────
+GAUGE_HTML = """<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #0f1117;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    padding: 8px;
+    overflow-y: auto;
+  }
+  #grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .card {
+    width: 150px;
+    height: 90px;
+    background: #1a1d27;
+    border-radius: 6px;
+    overflow: hidden;
+    cursor: grab;
+    position: relative;
+    transition: background 0.15s;
+  }
+  .card.logging { background: #281414; }
+  .card .strip {
+    height: 5px;
+    background: #2a2d3a;
+    transition: background 0.15s;
+  }
+  .card.drag-over .strip { background: #4f9cf9; }
+  .card .name {
+    font-size: 9px;
+    color: #64748b;
+    text-align: center;
+    padding: 4px 4px 0;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .card .value {
+    font-size: 22px;
+    font-weight: 700;
+    color: #e2e8f0;
+    text-align: center;
+    padding: 2px 4px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+</style>
+</head>
+<body>
+<div id="grid"></div>
+<script>
+var _order  = [];
+var _values = {};
+var _colors = {};
+var _logging = false;
+var _dragSrc = null;
 
-COLOR_PRESETS = [
-    ("Red",    wx.Colour(80, 20, 20)),
-    ("Orange", wx.Colour(80, 50, 10)),
-    ("Green",  wx.Colour(10, 60, 30)),
-    ("Blue",   wx.Colour(10, 40, 80)),
-    ("Purple", wx.Colour(50, 20, 80)),
-    ("Clear",  None),
-]
+function setParams(order, colors) {
+  _order  = order;
+  _colors = colors;
+  renderAll();
+}
+
+function update(byName, isLogging) {
+  var changed = (isLogging !== _logging);
+  _logging = isLogging;
+  for (var i = 0; i < _order.length; i++) {
+    var n = _order[i];
+    if (byName[n] !== undefined && byName[n] !== _values[n]) {
+      _values[n] = byName[n];
+      changed = true;
+    }
+  }
+  if (changed) renderAll();
+}
+
+function renderAll() {
+  var grid = document.getElementById('grid');
+  // reuse existing cards to avoid full DOM rebuild
+  var existing = {};
+  var cards = grid.querySelectorAll('.card');
+  for (var i = 0; i < cards.length; i++) existing[cards[i].dataset.name] = cards[i];
+
+  // remove cards no longer in order
+  for (var n in existing) {
+    if (_order.indexOf(n) === -1) grid.removeChild(existing[n]);
+  }
+
+  // insert/reorder cards
+  for (var i = 0; i < _order.length; i++) {
+    var name = _order[i];
+    var card = existing[name] || makeCard(name);
+    updateCard(card, name);
+    if (grid.children[i] !== card) grid.insertBefore(card, grid.children[i] || null);
+  }
+}
+
+function makeCard(name) {
+  var card = document.createElement('div');
+  card.className = 'card';
+  card.dataset.name = name;
+  card.draggable = true;
+  card.innerHTML =
+    '<div class="strip"></div>' +
+    '<div class="name">' + escHtml(name) + '</div>' +
+    '<div class="value">—</div>';
+  card.addEventListener('dragstart', onDragStart);
+  card.addEventListener('dragover',  onDragOver);
+  card.addEventListener('dragleave', onDragLeave);
+  card.addEventListener('drop',      onDrop);
+  card.addEventListener('contextmenu', onCtxMenu);
+  return card;
+}
+
+function updateCard(card, name) {
+  card.classList.toggle('logging', _logging);
+  var bg = (!_logging && _colors[name]) ? _colors[name] : null;
+  card.style.background = bg || (_logging ? '#281414' : '#1a1d27');
+  card.querySelector('.value').textContent = _values[name] !== undefined ? _values[name] : '—';
+}
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ── Drag-to-reorder ───────────────────────────────────────────────────────
+function onDragStart(e) { _dragSrc = this; e.dataTransfer.effectAllowed = 'move'; }
+function onDragOver(e)  { e.preventDefault(); this.classList.add('drag-over'); }
+function onDragLeave()  { this.classList.remove('drag-over'); }
+function onDrop(e) {
+  e.preventDefault();
+  this.classList.remove('drag-over');
+  if (_dragSrc === this) return;
+  var src = _order.indexOf(_dragSrc.dataset.name);
+  var dst = _order.indexOf(this.dataset.name);
+  if (src === -1 || dst === -1) return;
+  _order.splice(dst, 0, _order.splice(src, 1)[0]);
+  renderAll();
+  if (window.onOrderChanged) window.onOrderChanged(_order);
+}
+
+// ── Right-click color menu ────────────────────────────────────────────────
+var _ctxName = null;
+var _ctxMenu = null;
+var COLOR_PRESETS = [
+  ['Red',    'rgb(80,20,20)'],
+  ['Orange', 'rgb(80,50,10)'],
+  ['Green',  'rgb(10,60,30)'],
+  ['Blue',   'rgb(10,40,80)'],
+  ['Purple', 'rgb(50,20,80)'],
+  ['Clear',  null],
+];
+
+function onCtxMenu(e) {
+  e.preventDefault();
+  _ctxName = this.dataset.name;
+  removeCtxMenu();
+  _ctxMenu = document.createElement('div');
+  _ctxMenu.style.cssText = 'position:fixed;background:#1a1d27;border:1px solid #2a2d3a;' +
+    'border-radius:4px;padding:4px 0;z-index:9999;min-width:90px;' +
+    'left:' + e.clientX + 'px;top:' + e.clientY + 'px;';
+  COLOR_PRESETS.forEach(function(p) {
+    var item = document.createElement('div');
+    item.textContent = p[0];
+    item.style.cssText = 'padding:5px 14px;color:#e2e8f0;font-size:12px;cursor:pointer;';
+    item.onmouseenter = function() { this.style.background='#2a2d3a'; };
+    item.onmouseleave = function() { this.style.background=''; };
+    item.onclick = function() { pickColor(_ctxName, p[1]); removeCtxMenu(); };
+    _ctxMenu.appendChild(item);
+  });
+  document.body.appendChild(_ctxMenu);
+  setTimeout(function() { document.addEventListener('click', removeCtxMenu, {once:true}); }, 0);
+}
+
+function removeCtxMenu() {
+  if (_ctxMenu && _ctxMenu.parentNode) _ctxMenu.parentNode.removeChild(_ctxMenu);
+  _ctxMenu = null;
+}
+
+function pickColor(name, color) {
+  _colors[name] = color;
+  renderAll();
+  if (window.onColorChanged) window.onColorChanged(name, color);
+}
+
+function getColors() { return JSON.stringify(_colors); }
+function getOrder()  { return JSON.stringify(_order); }
+</script>
+</body>
+</html>
+"""
 
 
 # ── Prefs ─────────────────────────────────────────────────────────────────────
@@ -154,223 +344,89 @@ class ParamSelectorDialog(wx.Dialog):
                 if self._clb.IsChecked(i)}
 
 
-# ── GaugeCanvas — single panel draws ALL cards ───────────────────────────────
+# ── GaugeView — WebView-based gauge renderer ──────────────────────────────────
 
-class GaugeCanvas(wx.Panel):
-    """
-    Draws every gauge card in one OnPaint call.
-    Plain Panel — no scroll machinery overhead.
-    """
-
-    def __init__(self, parent, on_prefs_changed):
-        super().__init__(parent, style=wx.BORDER_NONE)
-        self.SetBackgroundStyle(wx.BG_STYLE_PAINT)
-
-        self._on_prefs_changed = on_prefs_changed  # callback(order)
-
-        # per-gauge state
-        self._order      = []
-        self._values     = {}
-        self._colors     = {}
-        self._upper      = {}
-        self._name_extents = {}   # name → (tw, th) for label
+class GaugeView(wx.html2.WebView):
+    def __init__(self, parent, on_order_changed, on_color_changed):
+        super().__init__(parent)
+        self._on_order_changed = on_order_changed
+        self._on_color_changed = on_color_changed
+        self._ready    = False
+        self._order    = []
+        self._colors   = {}
+        self._values   = {}
         self._is_logging = False
-        self._drag_name  = None        # name of card being dragged
-        self._drop_idx   = None        # drop target index
-        self._rects      = {}          # name → wx.Rect (updated each paint)
+        self._pending_params = None  # set_params called before ready
 
-        self._font_name   = None        # created lazily
-        self._font_value  = None
-        self._brush_cache = {}          # wx.Colour key → wx.Brush
+        self.SetPage(GAUGE_HTML, "")
+        self.Bind(wx.html2.EVT_WEBVIEW_LOADED, self._on_loaded)
 
-        self.Bind(wx.EVT_PAINT,       self._on_paint)
-        self.Bind(wx.EVT_SIZE,        self._on_size)
-        self.Bind(wx.EVT_LEFT_DOWN,   self._on_left_down)
-        self.Bind(wx.EVT_LEFT_UP,     self._on_left_up)
-        self.Bind(wx.EVT_MOTION,      self._on_motion)
-        self.Bind(wx.EVT_RIGHT_DOWN,  self._on_right_click)
-
-    # ── Public API ────────────────────────────────────────────────────────────
+    def _on_loaded(self, _):
+        self._ready = True
+        # wire JS callbacks → Python
+        self.Bind(wx.html2.EVT_WEBVIEW_SCRIPT_MESSAGE_RECEIVED, self._on_js_message)
+        # inject bridge: JS calls window.pybridge('orderChanged', ...) etc.
+        self.RunScript("""
+            window.onOrderChanged = function(order) {
+                window.wx_order_changed = JSON.stringify(order);
+            };
+            window.onColorChanged = function(name, color) {
+                window.wx_color_changed = JSON.stringify({name: name, color: color});
+            };
+        """)
+        if self._pending_params is not None:
+            order, colors = self._pending_params
+            self._pending_params = None
+            self.set_params(order, colors)
 
     def set_params(self, order, colors):
-        self._order      = list(order)
-        self._colors     = {n: wx.Colour(*c) if c else None for n, c in colors.items()}
-        self._values     = {n: self._values.get(n, "—") for n in order}
-        self._upper      = {n: n.upper() for n in order}   # cache uppercased labels
-        self._brush_cache = {}
-        self._recalc_virtual_size()
-        self.Refresh()
+        self._order  = list(order)
+        self._colors = dict(colors)
+        if not self._ready:
+            self._pending_params = (order, colors)
+            return
+        order_js  = json.dumps(order)
+        colors_js = json.dumps(colors)
+        self.RunScript(f"setParams({order_js}, {colors_js});")
 
     def update(self, by_name, is_logging):
-        changed = is_logging != self._is_logging
+        if not self._ready:
+            return
         self._is_logging = is_logging
-        for name in self._order:
-            new_val = by_name.get(name)
-            if new_val is not None and new_val != self._values.get(name):
-                self._values[name] = new_val
-                changed = True
-        if changed:
-            self.Refresh()
+        # only pass values for params we're showing
+        filtered = {n: by_name[n] for n in self._order if n in by_name}
+        by_name_js  = json.dumps(filtered)
+        is_log_js   = "true" if is_logging else "false"
+        self.RunScript(f"update({by_name_js}, {is_log_js});")
+        # poll JS for order/color changes (simple polling — no full message bridge needed)
+        self._poll_js_changes()
+
+    def _poll_js_changes(self):
+        ok, val = self.RunScript("window.wx_order_changed || ''")
+        if ok and val and val != "''":
+            self.RunScript("window.wx_order_changed = null;")
+            try:
+                order = json.loads(val)
+                self._order = order
+                self._on_order_changed(order)
+            except Exception:
+                pass
+
+        ok, val = self.RunScript("window.wx_color_changed || ''")
+        if ok and val and val != "''":
+            self.RunScript("window.wx_color_changed = null;")
+            try:
+                data = json.loads(val)
+                self._colors[data["name"]] = data["color"]
+                self._on_color_changed(data["name"], data["color"])
+            except Exception:
+                pass
 
     def get_order(self):
         return list(self._order)
 
     def get_colors(self):
-        return {n: (c.Red(), c.Green(), c.Blue()) for n, c in self._colors.items() if c}
-
-    def set_mark_color(self, name, color):
-        self._colors[name] = color
-        self.Refresh()
-        self.Update()
-
-    # ── Layout helpers ────────────────────────────────────────────────────────
-
-    def _cols(self):
-        w = self.GetClientSize().width
-        return max(1, (w + CARD_PAD) // (CARD_W + CARD_PAD))
-
-    def _recalc_virtual_size(self):
-        pass  # no scrolling
-
-    def _card_rect(self, idx):
-        cols = self._cols()
-        row, col = divmod(idx, cols)
-        x = CARD_PAD + col * (CARD_W + CARD_PAD)
-        y = CARD_PAD + row * (CARD_H + CARD_PAD)
-        return wx.Rect(x, y, CARD_W, CARD_H)
-
-    def _idx_at(self, pos):
-        for i in range(len(self._order)):
-            if self._card_rect(i).Contains(pos):
-                return i
-        return None
-
-    def _screen_to_canvas(self, screen_pt):
-        return self.ScreenToClient(screen_pt)
-
-    # ── Paint ─────────────────────────────────────────────────────────────────
-
-    def _on_paint(self, _):
-        import time as _t; _t0 = _t.perf_counter()
-        if self._font_name is None:
-            self._font_name  = wx.Font(7,  wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL)
-            self._font_value = wx.Font(16, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD)
-            self._brush_bg   = wx.Brush(CLR_BG)
-            self._pen_none   = wx.TRANSPARENT_PEN
-
-        cw, ch = self.GetClientSize()
-        if cw < 1 or ch < 1:
-            wx.PaintDC(self)
-            return
-
-        pdc = wx.PaintDC(self)
-        gc  = wx.GraphicsContext.Create(pdc)
-        if gc is None:
-            return
-
-        # background
-        gc.SetBrush(gc.CreateBrush(self._brush_bg))
-        gc.DrawRectangle(0, 0, cw, ch)
-
-        fn  = gc.CreateFont(self._font_name,  CLR_MUTED)
-        fv  = gc.CreateFont(self._font_value, CLR_TEXT)
-
-        for i, name in enumerate(self._order):
-            r = self._card_rect(i)
-
-            # card background
-            if self._is_logging:
-                bg = CLR_LOG_BG
-            elif self._colors.get(name):
-                bg = self._colors[name]
-            else:
-                bg = CLR_SURFACE
-            gc.SetBrush(gc.CreateBrush(wx.Brush(bg)))
-            gc.SetPen(wx.TRANSPARENT_PEN)
-            gc.DrawRectangle(r.x, r.y, CARD_W, CARD_H)
-
-            # handle strip
-            strip_clr = CLR_ACCENT if i == self._drop_idx else CLR_BORDER
-            gc.SetBrush(gc.CreateBrush(wx.Brush(strip_clr)))
-            gc.DrawRectangle(r.x, r.y, CARD_W, 5)
-
-            # name label
-            gc.SetFont(fn)
-            label = self._upper.get(name, name)
-            tw, th = gc.GetTextExtent(label)
-            gc.DrawText(label, r.x + (CARD_W - tw) / 2, r.y + 10)
-
-            # value
-            gc.SetFont(fv)
-            val = self._values.get(name, "—")
-            tw, th = gc.GetTextExtent(val)
-            gc.DrawText(val, r.x + (CARD_W - tw) / 2, r.y + 28)
-
-        print(f"paint {len(self._order)}: {(_t.perf_counter()-_t0)*1000:.0f}ms", flush=True)
-
-    def _on_size(self, _):
-        self._recalc_virtual_size()
-        self.Refresh()
-
-    # ── Mouse: drag-to-reorder ────────────────────────────────────────────────
-
-    def _on_left_down(self, event):
-        pos = self._screen_to_canvas(self.ClientToScreen(event.GetPosition()))
-        idx = self._idx_at(pos)
-        if idx is None:
-            return
-        r = self._card_rect(idx)
-        # only start drag from the top handle strip
-        if pos.y - r.y <= 10:
-            self._drag_name = self._order[idx]
-            self.CaptureMouse()
-
-    def _on_left_up(self, event):
-        if self._drag_name is None:
-            return
-        if self.HasCapture():
-            self.ReleaseMouse()
-        pos = self._screen_to_canvas(self.ClientToScreen(event.GetPosition()))
-        target = self._idx_at(pos)
-        if target is not None:
-            src = self._order.index(self._drag_name)
-            if src != target:
-                self._order.insert(target, self._order.pop(src))
-                self._on_prefs_changed(self._order)
-        self._drag_name = None
-        self._drop_idx  = None
-        self.Refresh()
-        self.Update()
-
-    def _on_motion(self, event):
-        if self._drag_name is None or not event.Dragging():
-            return
-        pos = self._screen_to_canvas(self.ClientToScreen(event.GetPosition()))
-        idx = self._idx_at(pos)
-        if idx != self._drop_idx:
-            self._drop_idx = idx
-            self.Refresh()
-            self.Update()
-
-    # ── Mouse: right-click color menu ────────────────────────────────────────
-
-    def _on_right_click(self, event):
-        pos = self._screen_to_canvas(self.ClientToScreen(event.GetPosition()))
-        idx = self._idx_at(pos)
-        if idx is None:
-            return
-        name = self._order[idx]
-        menu = wx.Menu()
-        for label, color in COLOR_PRESETS:
-            item = menu.Append(wx.ID_ANY, label)
-            self.Bind(wx.EVT_MENU, lambda e, n=name, c=color: self._pick_color(n, c), item)
-        self.PopupMenu(menu)
-        menu.Destroy()
-
-    def _pick_color(self, name, color):
-        self._colors[name] = color
-        self.Refresh()
-        self._on_prefs_changed(self._order)
+        return dict(self._colors)
 
 
 # ── Main panel ────────────────────────────────────────────────────────────────
@@ -472,9 +528,9 @@ class MainPanel(wx.Panel):
             child.SetForegroundColour(CLR_TEXT)
         root.Add(status_panel, 0, wx.EXPAND | wx.TOP, 6)
 
-        # ── Gauge canvas ──────────────────────────────────────────────────────
-        self._canvas = GaugeCanvas(self, self._save_prefs)
-        root.Add(self._canvas, 1, wx.EXPAND | wx.ALL, 10)
+        # ── Gauge WebView ─────────────────────────────────────────────────────
+        self._gauge = GaugeView(self, self._on_order_changed, self._on_color_changed)
+        root.Add(self._gauge, 1, wx.EXPAND | wx.ALL, 10)
 
         self.SetSizer(root)
 
@@ -590,7 +646,7 @@ class MainPanel(wx.Panel):
         for n in self._selected:
             if n not in ordered:
                 ordered.append(n)
-        self._canvas.set_params(ordered, self._prefs.get("colors", {}))
+        self._gauge.set_params(ordered, self._prefs.get("colors", {}))
 
     def _initial_apply(self):
         saved = set(self._prefs.get("selected", []))
@@ -634,15 +690,22 @@ class MainPanel(wx.Panel):
         log_label = "● LOGGING" if is_logging else ""
         if log_label != self._logging_text.GetLabel():
             self._logging_text.SetLabel(log_label)
-        self._canvas.update(by_name, is_logging)
+        self._gauge.update(by_name, is_logging)
 
-    # ── Prefs save ────────────────────────────────────────────────────────────
+    # ── JS callbacks → prefs ──────────────────────────────────────────────────
 
-    def _save_prefs(self, order):
-        self._prefs["order"]    = order
+    def _on_order_changed(self, order):
+        self._prefs["order"] = order
         self._prefs["selected"] = list(self._selected)
-        self._prefs["colors"]   = self._canvas.get_colors()
+        self._prefs["colors"] = self._gauge.get_colors()
         _save_prefs(self._prefs)
+
+    def _on_color_changed(self, name, color):
+        colors = self._gauge.get_colors()
+        self._prefs["colors"] = colors
+        _save_prefs(self._prefs)
+
+    # ── Status ────────────────────────────────────────────────────────────────
 
     def _set_status(self, text, color):
         if text == self._last_status:
