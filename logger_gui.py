@@ -160,9 +160,8 @@ function makeCard(name) {
 }
 
 function updateCard(card, name) {
-  card.classList.toggle('logging', _logging);
-  var bg = (!_logging && _colors[name]) ? _colors[name] : null;
-  card.style.background = bg || (_logging ? '#281414' : '#1a1d27');
+  var bg = _colors[name] || '#1a1d27';
+  card.style.background = bg;
   card.querySelector('.value').textContent = _values[name] !== undefined ? _values[name] : '—';
   card.querySelector('.unit').textContent  = _units[name]  || '';
 }
