@@ -376,8 +376,8 @@ class GaugeView:
         self._wv.SetPage(GAUGE_HTML, "")
         self._wv.Bind(wx.html2.EVT_WEBVIEW_LOADED, self._on_loaded)
 
-    def _run(self, script):
-        if self._busy:
+    def _run(self, script, force=False):
+        if self._busy and not force:
             return False, ""
         self._busy = True
         try:
@@ -417,7 +417,7 @@ class GaugeView:
             self._pending_params = (order, colors)
             return
         self._pending_params = None
-        self._run(f"setParams({json.dumps(order)}, {json.dumps(colors)});")
+        self._run(f"setParams({json.dumps(order)}, {json.dumps(colors)});", force=True)
 
     def update(self, by_name, by_unit, is_logging):
         if not self._ready:
