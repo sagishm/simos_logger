@@ -168,8 +168,8 @@ class GaugeCard(wx.Panel):
         ("Clear",  None),
     ]
 
-    _FONT_NAME  = wx.Font(7,  wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL)
-    _FONT_VALUE = wx.Font(18, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD)
+    _FONT_NAME  = None
+    _FONT_VALUE = None
 
     def __init__(self, parent, name, unit=""):
         super().__init__(parent, size=(140, 86), style=wx.BORDER_NONE)
@@ -188,6 +188,9 @@ class GaugeCard(wx.Panel):
     # ── Drawing ───────────────────────────────────────────────────────────────
 
     def _on_paint(self, _):
+        if GaugeCard._FONT_NAME is None:
+            GaugeCard._FONT_NAME  = wx.Font(7,  wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL)
+            GaugeCard._FONT_VALUE = wx.Font(18, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD)
         dc = wx.AutoBufferedPaintDC(self)   # double-buffered, no flicker
         w, h = self.GetSize()
 
