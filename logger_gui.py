@@ -170,14 +170,18 @@ class MainPanel(wx.Panel):
         super().__init__(parent)
         self.SetBackgroundColour(CLR_BG)
 
-        self._logger       = None
-        self._thread       = None
-        self._cards        = {}        # name → GaugeCard
-        self._iface_list   = []        # parallel list to dropdown: (label, type, path)
-        self._last_status  = ""        # avoid redundant Layout() calls
+        self._logger      = None
+        self._thread      = None
+        self._cards       = {}        # name → GaugeCard
+        self._iface_list  = []        # parallel list to dropdown: (label, type, path)
+        self._last_status = ""
 
         self._build_ui()
-        self._do_scan()                # populate on startup
+        self._do_scan()               # populate on startup
+
+        # Poll logger state at 10fps from GUI thread — no wx.CallAfter flooding
+        self._ui_timer = wx.Timer(self)
+        self.Bind(wx.EVT_TIMER, self._on_ui_timer, self._ui_timer)
 
     def _build_ui(self):
         root = wx.BoxSizer(wx.VERTICAL)
@@ -339,7 +343,6 @@ class MainPanel(wx.Panel):
             mode=mode,
             log_path=log_path + os.sep,
             run_server=stream,
-            callback=self._on_logger_callback,
         )
 
         self._connect_btn.Enable(False)
@@ -349,6 +352,7 @@ class MainPanel(wx.Panel):
 
         self._thread = threading.Thread(target=self._run_logger, daemon=True)
         self._thread.start()
+        self._ui_timer.Start(100)  # 10fps
 
     def _run_logger(self):
         try:
@@ -357,43 +361,24 @@ class MainPanel(wx.Panel):
             wx.CallAfter(self._set_status, "Error: " + str(e), CLR_RED)
             wx.CallAfter(self._reset_buttons)
 
-    def _on_stop(self, _):
-        if self._logger:
-            self._logger.stop()
-        self._reset_buttons()
-        self._set_status("Disconnected", CLR_MUTED)
-        self._logging_text.SetLabel("")
+    # ── Timer-driven UI update (replaces wx.CallAfter flooding) ──────────────
 
-    def _on_toggle_log(self, _):
-        if self._logger:
-            self._logger.toggle_key_trigger()
+    def _on_ui_timer(self, _):
+        if self._logger is None:
+            return
 
-    def _reset_buttons(self):
-        self._connect_btn.Enable(True)
-        self._stop_btn.Enable(False)
-        self._log_toggle_btn.Enable(False)
+        data = self._logger.data_stream
 
-    # ── Logger callback ───────────────────────────────────────────────────────
-
-    def _on_logger_callback(self, status="", data=None):
-        wx.CallAfter(self._update_ui, status, data)
-
-    def _update_ui(self, status, data):
-        is_logging = False
-        if data:
-            is_logging = data.get("isLogging", {}).get("Value") == "True"
-
-        if "Error" in status or "Timeout" in status:
-            self._set_status(status, CLR_RED)
-        elif any(w in status.lower() for w in ("running", "polling", "connected")):
-            self._set_status(status, CLR_GREEN)
-        else:
-            self._set_status(status, CLR_MUTED)
-
+        is_logging = data.get("isLogging", {}).get("Value") == "True"
         self._logging_text.SetLabel("● LOGGING" if is_logging else "")
 
-        if not data:
+        if self._logger.kill:
+            self._ui_timer.Stop()
+            self._set_status("Stopped", CLR_MUTED)
+            self._reset_buttons()
             return
+
+        self._set_status("Connected — polling", CLR_GREEN)
 
         rebuilt = False
         for key, entry in data.items():
@@ -411,6 +396,23 @@ class MainPanel(wx.Panel):
         if rebuilt:
             self._grid_panel.Layout()
             self._grid_sizer.FitInside(self._grid_panel)
+
+    def _on_toggle_log(self, _):
+        if self._logger:
+            self._logger.toggle_key_trigger()
+
+    def _on_stop(self, _):
+        self._ui_timer.Stop()
+        if self._logger:
+            self._logger.stop()
+        self._reset_buttons()
+        self._set_status("Disconnected", CLR_MUTED)
+        self._logging_text.SetLabel("")
+
+    def _reset_buttons(self):
+        self._connect_btn.Enable(True)
+        self._stop_btn.Enable(False)
+        self._log_toggle_btn.Enable(False)
 
     def _set_status(self, text, color):
         if text == self._last_status:
