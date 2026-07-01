@@ -483,27 +483,39 @@ class LoggerCore:
     # ── TCP stream (for logger_viewer.html) ───────────────────────────────────
 
     def _stream_server(self):
-        HOST, PORT = "0.0.0.0", 65432
+        HOST, PORT = "127.0.0.1", 65432
         self._log.info("Starting TCP stream on %s:%d", HOST, PORT)
+        srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        srv.settimeout(1.0)          # unblock accept() every second to check self.kill
+        try:
+            srv.bind((HOST, PORT))
+            srv.listen()
+        except Exception as e:
+            self._log.error("Stream server bind failed: %s", e)
+            return
         while not self.kill:
             try:
-                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                    s.bind((HOST, PORT))
-                    s.listen()
-                    conn, addr = s.accept()
-                    self._log.info("Stream client connected: " + str(addr))
-                    with conn:
-                        conn.sendall(
-                            b"HTTP/1.1 200 OK\n"
-                            b"Content-Type: stream\n"
-                            b"Access-Control-Allow-Origin: *\n\n"
-                        )
-                        while not self.kill:
-                            conn.sendall((json.dumps(self.data_stream) + "\n").encode())
-                            time.sleep(0.1)
+                conn, addr = srv.accept()
+            except socket.timeout:
+                continue
+            except Exception:
+                break
+            self._log.info("Stream client connected: %s", addr)
+            try:
+                conn.sendall(
+                    b"HTTP/1.1 200 OK\n"
+                    b"Content-Type: stream\n"
+                    b"Access-Control-Allow-Origin: *\n\n"
+                )
+                while not self.kill:
+                    conn.sendall((json.dumps(self.data_stream) + "\n").encode())
+                    time.sleep(0.1)
             except Exception:
                 pass
+            finally:
+                conn.close()
+        srv.close()
 
     # ── Raw send ──────────────────────────────────────────────────────────────
 
