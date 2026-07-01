@@ -406,16 +406,17 @@ class GaugeView:
         self._is_logging = is_logging
         filtered = {n: by_name[n] for n in self._order if n in by_name}
         self._run(f"update({json.dumps(filtered)}, {'true' if is_logging else 'false'});")
-        self._poll_js_changes()
 
-    def _poll_js_changes(self):
+    def poll_changes(self):
+        if not self._ready:
+            return
         ok, val = self._run("window.wx_order_changed || ''")
         if ok and val and val not in ("''", ""):
             self._run("window.wx_order_changed = null;")
             try:
                 order = json.loads(val)
                 self._order = order
-                self._on_order_changed(order)
+                wx.CallAfter(self._on_order_changed, order)
             except Exception:
                 pass
 
@@ -425,7 +426,7 @@ class GaugeView:
             try:
                 data = json.loads(val)
                 self._colors[data["name"]] = data["color"]
-                self._on_color_changed(data["name"], data["color"])
+                wx.CallAfter(self._on_color_changed, data["name"], data["color"])
             except Exception:
                 pass
 
@@ -698,6 +699,7 @@ class MainPanel(wx.Panel):
         if log_label != self._logging_text.GetLabel():
             self._logging_text.SetLabel(log_label)
         self._gauge.update(by_name, is_logging)
+        self._gauge.poll_changes()
 
     # ── JS callbacks → prefs ──────────────────────────────────────────────────
 
