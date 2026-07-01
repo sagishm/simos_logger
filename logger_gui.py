@@ -69,7 +69,12 @@ GAUGE_HTML = """<!DOCTYPE html>
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  .card .value {
+  .card .unit {
+    font-size: 9px;
+    color: #64748b;
+    text-align: center;
+    padding: 0 4px 2px;
+  }
     font-size: 22px;
     font-weight: 700;
     color: #e2e8f0;
@@ -86,6 +91,7 @@ GAUGE_HTML = """<!DOCTYPE html>
 <script>
 var _order  = [];
 var _values = {};
+var _units  = {};
 var _colors = {};
 var _logging = false;
 var _dragSrc = null;
@@ -96,13 +102,17 @@ function setParams(order, colors) {
   renderAll();
 }
 
-function update(byName, isLogging) {
+function update(byName, byUnit, isLogging) {
   var changed = (isLogging !== _logging);
   _logging = isLogging;
   for (var i = 0; i < _order.length; i++) {
     var n = _order[i];
     if (byName[n] !== undefined && byName[n] !== _values[n]) {
       _values[n] = byName[n];
+      changed = true;
+    }
+    if (byUnit[n] !== undefined && byUnit[n] !== _units[n]) {
+      _units[n] = byUnit[n];
       changed = true;
     }
   }
@@ -138,7 +148,8 @@ function makeCard(name) {
   card.innerHTML =
     '<div class="strip"></div>' +
     '<div class="name">' + escHtml(name) + '</div>' +
-    '<div class="value">—</div>';
+    '<div class="value">—</div>' +
+    '<div class="unit"></div>';
   card.addEventListener('dragstart', onDragStart);
   card.addEventListener('dragover',  onDragOver);
   card.addEventListener('dragleave', onDragLeave);
@@ -152,6 +163,7 @@ function updateCard(card, name) {
   var bg = (!_logging && _colors[name]) ? _colors[name] : null;
   card.style.background = bg || (_logging ? '#281414' : '#1a1d27');
   card.querySelector('.value').textContent = _values[name] !== undefined ? _values[name] : '—';
+  card.querySelector('.unit').textContent  = _units[name]  || '';
 }
 
 function escHtml(s) {
@@ -355,7 +367,7 @@ class GaugeView:
         self._ready    = False
         self._order    = []
         self._colors   = {}
-        self._values   = {}
+        self._units    = {}
         self._is_logging = False
         self._pending_params = None
 
@@ -400,12 +412,14 @@ class GaugeView:
         self._pending_params = None
         self._run(f"setParams({json.dumps(order)}, {json.dumps(colors)});")
 
-    def update(self, by_name, is_logging):
+    def update(self, by_name, by_unit, is_logging):
         if not self._ready:
             return
         self._is_logging = is_logging
+        self._units.update(by_unit)
         filtered = {n: by_name[n] for n in self._order if n in by_name}
-        self._run(f"update({json.dumps(filtered)}, {'true' if is_logging else 'false'});")
+        units    = {n: self._units.get(n, "") for n in self._order}
+        self._run(f"update({json.dumps(filtered)}, {json.dumps(units)}, {'true' if is_logging else 'false'});")
 
     def poll_changes(self):
         if not self._ready:
@@ -682,15 +696,19 @@ class MainPanel(wx.Panel):
         data = dict(self._logger.data_stream)
 
         by_name   = {}
+        by_unit   = {}
         new_found = False
         for v in data.values():
             if not isinstance(v, dict):
                 continue
             name = v.get("Name", "")
             val  = v.get("Value", "—")
+            unit = v.get("Unit", "")
             if not name or name == "Time":
                 continue
             by_name[name] = val
+            if unit:
+                by_unit[name] = unit
             if name != "isLogging" and name not in self._all_params:
                 self._all_params.append(name)
                 new_found = True
@@ -703,7 +721,7 @@ class MainPanel(wx.Panel):
         log_label = "● LOGGING" if is_logging else ""
         if log_label != self._logging_text.GetLabel():
             self._logging_text.SetLabel(log_label)
-        self._gauge.update(by_name, is_logging)
+        self._gauge.update(by_name, by_unit, is_logging)
         self._gauge.poll_changes()
 
     # ── JS callbacks → prefs ──────────────────────────────────────────────────

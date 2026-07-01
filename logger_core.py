@@ -159,6 +159,7 @@ class LoggerCore:
                 addr = row["Address"].lstrip("0x").lower()
                 self.log_params[idx] = {
                     "Name":     row["Name"],
+                    "Unit":     row.get("Unit", ""),
                     "Address":  row["Address"],
                     "Length":   int(row["Length"]),
                     "Equation": row["Equation"].lower(),
@@ -298,7 +299,7 @@ class LoggerCore:
 
         row = self._clear_stream()
         for idx, p in self.log_params.items():
-            self._stream_buf[idx] = {"Name": p["Name"], "Value": str(p["Value"])}
+            self._stream_buf[idx] = {"Name": p["Name"], "Unit": p["Unit"], "Value": str(p["Value"])}
             row += "," + str(p["Value"])
         self._write_csv(row)
 
@@ -345,7 +346,7 @@ class LoggerCore:
                     raw = struct.unpack("f", int(raw).to_bytes(4, "little"))[0]
                 self._set_pid_value(idx, raw)
 
-            self._stream_buf[idx] = {"Name": p["Name"], "Value": str(p["Value"])}
+            self._stream_buf[idx] = {"Name": p["Name"], "Unit": p["Unit"], "Value": str(p["Value"])}
             row += "," + str(p["Value"])
         self._write_csv(row)
 
