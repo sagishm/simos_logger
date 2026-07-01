@@ -537,11 +537,8 @@ class MainPanel(wx.Panel):
         ss = wx.BoxSizer(wx.HORIZONTAL)
         self._status_dot   = wx.StaticText(status_panel, label="●")
         self._status_text  = wx.StaticText(status_panel, label="Disconnected")
-        self._logging_text = wx.StaticText(status_panel, label="")
         self._status_dot.SetForegroundColour(CLR_MUTED)
         self._status_text.SetForegroundColour(CLR_MUTED)
-        self._logging_text.SetForegroundColour(CLR_RED)
-        self._logging_text.SetFont(wx.Font(9, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
         self._log_toggle_btn    = wx.Button(status_panel, label="Start Log",    size=(90, -1))
         self._select_params_btn = wx.Button(status_panel, label="Select Params", size=(100, -1))
         self._log_toggle_btn.Enable(False)
@@ -550,7 +547,6 @@ class MainPanel(wx.Panel):
         self._select_params_btn.Bind(wx.EVT_BUTTON, self._on_select_params)
         ss.Add(self._status_dot,        0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT,  10)
         ss.Add(self._status_text,       0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT,   6)
-        ss.Add(self._logging_text,      0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT,  16)
         ss.Add(self._log_toggle_btn,    0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT,  20)
         ss.Add(self._select_params_btn, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT,  10)
         status_panel.SetSizer(ss)
@@ -651,7 +647,7 @@ class MainPanel(wx.Panel):
             self._logger.stop()
         self._reset_buttons()
         self._set_status("Disconnected", CLR_MUTED)
-        self._logging_text.SetLabel("")
+        self._log_toggle_btn.SetLabel("Start Log")
 
     def _on_toggle_log(self, _):
         if self._logger:
@@ -699,7 +695,7 @@ class MainPanel(wx.Panel):
         if self._logger.kill:
             self._ui_timer.Stop()
             self._set_status("Stopped", CLR_MUTED)
-            self._logging_text.SetLabel("")
+            self._log_toggle_btn.SetLabel("Start Log")
             self._reset_buttons()
             return
 
@@ -733,9 +729,7 @@ class MainPanel(wx.Panel):
         else:
             self._set_status("Connecting…", CLR_MUTED)
         log_label = "● LOGGING" if is_logging else ""
-        if log_label != self._logging_text.GetLabel():
-            self._logging_text.SetLabel(log_label)
-            self._log_toggle_btn.SetLabel("Stop Log" if is_logging else "Start Log")
+        self._log_toggle_btn.SetLabel("Stop Log" if is_logging else "Start Log")
         self._gauge.update(by_name, by_unit, is_logging)
         self._gauge.poll_changes()
 
