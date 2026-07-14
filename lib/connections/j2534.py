@@ -246,17 +246,18 @@ class J2534:
 
         pNumMsgs = c_ulong(pNumMsgs)
         # self.logger.debug("Calling readMsgs with timeout: " + str(Timeout))
-        while 1:
-            # breakpoint()
+        while True:
             result = dllPassThruReadMsgs(
                 ChannelID, byref(pMsg), byref(pNumMsgs), c_ulong(Timeout)
             )
-            if Error_ID(result) == Error_ID.ERR_BUFFER_EMPTY or pNumMsgs == 0:
+            if Error_ID(result) == Error_ID.ERR_BUFFER_EMPTY or pNumMsgs.value == 0:
                 return None, None, 0
-            elif pMsg.RxStatus == 0:
+            if pMsg.RxStatus == 0:
                 return Error_ID(result), bytes(pMsg.Data[4 : pMsg.DataSize]), pNumMsgs
-            # else:
-            #    self.logger.debug("No valid response received: " + str(pMsg.RxStatus) + " - " + str(bytes(pMsg.Data[0:pMsg.DataSize])) + " - " + str(pMsg.Error_ID(result)))
+            # RxStatus != 0 means TX echo or loopback — discard and read next frame
+            pMsg = PASSTHRU_MSG()
+            pMsg.ProtocolID = protocol
+            pNumMsgs = c_ulong(1)
 
     def PassThruWriteMsgs(self, ChannelID, Data, protocol, pNumMsgs=1, Timeout=1000):
         txmsg = PASSTHRU_MSG()
@@ -320,7 +321,7 @@ class J2534:
     def PassThruIoctl(self, Handle, IoctlID, ioctlInput=None, ioctlOutput=None):
 
         if ioctlInput is None:
-            pInput = POINTER(c_ulong)()
+            pInput = None
         else:
             inputParam = SCONFIG()
             inputParam.Parameter = ioctlInput.Parameter
@@ -336,7 +337,9 @@ class J2534:
             pOutput = byref(ioctlOutput)
 
         result = dllPassThruIoctl(
-            Handle, c_ulong(IoctlID.value), byref(pInput), pOutput
+            Handle, c_ulong(IoctlID.value),
+            byref(pInput) if pInput is not None else None,
+            pOutput
         )
 
         if ioctlInput:
