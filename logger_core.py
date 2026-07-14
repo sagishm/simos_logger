@@ -76,9 +76,18 @@ class LoggerCore:
         self._log = logging.getLogger("VWLogger")
         self._log.setLevel(log_level)
         if not self._log.handlers:
+            fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
             h = logging.StreamHandler()
-            h.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+            h.setFormatter(fmt)
             self._log.addHandler(h)
+            log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+            os.makedirs(log_dir, exist_ok=True)
+            fh = logging.FileHandler(
+                os.path.join(log_dir, "session_" + self.current_time + ".log"),
+                encoding="utf-8",
+            )
+            fh.setFormatter(fmt)
+            self._log.addHandler(fh)
 
         self._load_config()
         self._load_params()
@@ -201,10 +210,13 @@ class LoggerCore:
             try:
                 self._main(client)
             except exceptions.NegativeResponseException as e:
+                self._log.error("ECU rejected request: %s", e.response.code_name, exc_info=True)
                 self._notify("ECU rejected request: " + e.response.code_name)
             except exceptions.TimeoutException:
+                self._log.error("Timeout — no response from ECU", exc_info=True)
                 self._notify("Timeout — no response from ECU")
             except Exception as e:
+                self._log.error("Unhandled error: %s", e, exc_info=True)
                 self._notify("Error: " + str(e))
                 raise
 
@@ -540,4 +552,5 @@ class LoggerCore:
             if result is not None:
                 return result
             self._log.warning("No response from ECU, retry %d/%d", attempt + 1, max_retries)
+        self._log.error("No response from ECU after %d attempts — data sent: %s", max_retries, data.hex())
         raise TimeoutError("No response from ECU after %d attempts" % max_retries)

@@ -68,7 +68,7 @@ class J2534:
         self.rxid = rxid.to_bytes(4, "big")
         self.txid = txid.to_bytes(4, "big")
 
-        self.logger = logging.getLogger()
+        self.logger = logging.getLogger("VWLogger")
 
         dllPassThruOpenProto = WINFUNCTYPE(c_long, c_void_p, POINTER(c_ulong))
 

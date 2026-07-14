@@ -173,7 +173,7 @@ class J2534Connection(BaseConnection):
                 if data is not None:
                     self.rxqueue.put(data)
             except Exception:
-                self.logger.critical("Exiting J2534 rx thread")
+                self.logger.critical("J2534 RX thread crashed", exc_info=True)
                 self.exit_requested = True
 
     def close(self):
