@@ -157,7 +157,8 @@ class USBISOTPConnection(BaseConnection):
         self.serial.write(payload)
 
     def specific_wait_frame(self, timeout=None):
-        timeout = 10
+        if timeout is None:
+            timeout = 10
         if not self.opened:
             raise RuntimeError("USB-ISOTP Connection is not open")
         try:
@@ -171,4 +172,5 @@ class USBISOTPConnection(BaseConnection):
         return frame
 
     def empty_rxqueue(self):
-        self.rxqueue.empty()
+        while not self.rxqueue.empty():
+            self.rxqueue.get_nowait()

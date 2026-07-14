@@ -52,6 +52,8 @@ class LoggerCore:
         self.is_key_triggered = False
         self.is_pid_triggered = False
 
+        self._base_path = os.path.dirname(os.path.abspath(__file__))
+
         self.data_stream  = {}
         self._stream_buf  = {}
         self.data_row     = None
@@ -93,7 +95,7 @@ class LoggerCore:
             log_type = "3E"
 
         self._fps        = 0
-        self._param_file = os.path.join("csv", "parameters_" + log_type.lower() + ".csv")
+        self._param_file = os.path.join(self._base_path, "logs", "csv", "parameters_" + log_type.lower() + ".csv")
 
         if not os.path.exists(config_file):
             self._log.warning("No config file found, using defaults")
@@ -129,8 +131,13 @@ class LoggerCore:
             mode_key = "Mode" + log_type
             if mode_key in cfg:
                 mc = cfg[mode_key]
-                if "fps"        in mc: self._fps        = mc["fps"]
-                if "param_file" in mc: self._param_file = mc["param_file"]
+                if "fps"        in mc: self._fps = mc["fps"]
+                if "param_file" in mc:
+                    pf = mc["param_file"]
+                    if os.path.isabs(pf):
+                        self._param_file = pf
+                    else:
+                        self._param_file = os.path.join(self._base_path, "logs", pf)
 
         except Exception as e:
             self._log.error("Error loading config: " + str(e))
@@ -140,7 +147,7 @@ class LoggerCore:
             self.calc_hp = 1
 
     def _load_params(self):
-        param_file = os.path.join(self.log_path, self._param_file)
+        param_file = self._param_file
         self._log.info("Parameter file: " + param_file)
 
         self.log_params       = {}   # int index → param dict
@@ -313,6 +320,7 @@ class LoggerCore:
             result = result[4:]
             pid    = self._get_param_by_address(addr)
             if pid is None:
+                self._log.warning("Unexpected address in Mode 22 response: %s — stopping parse", addr)
                 break
             length  = self.log_params[pid]["Length"] * 2
             val_hex = result[:length]
@@ -525,11 +533,11 @@ class LoggerCore:
 
     # ── Raw send ──────────────────────────────────────────────────────────────
 
-    def _send_raw(self, data):
-        result = None
-        while result is None:
+    def _send_raw(self, data, max_retries=3):
+        for attempt in range(max_retries):
             self.conn.send(data)
             result = self.conn.wait_frame(timeout=4)
-            if result is None:
-                self._log.warning("No response from ECU, retrying…")
-        return result
+            if result is not None:
+                return result
+            self._log.warning("No response from ECU, retry %d/%d", attempt + 1, max_retries)
+        raise TimeoutError("No response from ECU after %d attempts" % max_retries)
